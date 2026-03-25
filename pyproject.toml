@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "unchainedsky-cli"
+version = "0.1.0"
+description = "Browser automation CLI over local Chrome CDP"
+requires-python = ">=3.10"
+dependencies = [
+    "websockets>=12.0",
+]
+
+[project.scripts]
+unchained = "unchained_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["unchained_cli*"]

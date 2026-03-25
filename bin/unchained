@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# unchained — bash entry point shim
+# Homebrew formulas and manual installs both call this script.
+set -euo pipefail
+
+# Prefer the Python that was used to install the package (set by Homebrew
+# virtualenv_install_with_resources), fall back to whatever python3 is in PATH.
+: "${UNCHAINED_PYTHON:=python3}"
+
+exec "$UNCHAINED_PYTHON" -m unchained_cli "$@"
