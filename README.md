@@ -5,13 +5,13 @@ Browser automation CLI over local Chrome CDP. No relay, no auth — pure local d
 ## Install
 
 ```bash
-brew install unchainedsky/tap/unchainedsky-cli
+brew install --HEAD unchainedsky/tap/unchainedsky-cli
 ```
 
 Or with pip:
 
 ```bash
-pip install unchainedsky-cli
+python3.10 -m pip install unchainedsky-cli
 ```
 
 ## Requirements
@@ -21,6 +21,8 @@ Chrome must be running with remote debugging enabled:
 ```bash
 open -a "Google Chrome" --args --remote-debugging-port=9222
 ```
+
+Python 3.10+ is required.
 
 ## Usage
 
@@ -42,7 +44,7 @@ unchained [--port PORT] [--tab TAB_ID] <command> [args]
 | `js <expression>` | Evaluate JavaScript |
 | `key <key> [--modifiers N]` | Press a key |
 | `wait [--strategy dom\|network\|both]` | Wait for page load |
-| `cookies get [--urls ...]` | Get cookies |
+| `cookies get [--urls URL ...]` | Get cookies |
 | `cookies set <json>` | Inject cookies |
 | `frames` | List iframes |
 | `ddm [flags ...]` | DOM Density Map (requires ddm binary) |
@@ -56,7 +58,7 @@ unchained click --selector "button.submit"
 unchained type "hello world"
 unchained key Enter
 
-# Target a specific tab or port
+# Target a specific tab or port (`--tab auto` uses the first page tab)
 unchained --port 9223 --tab <tab-id> navigate https://example.com
 
 # Extract data
@@ -68,6 +70,7 @@ unchained screenshot --output page.png
 
 # Cookies
 unchained cookies get
+unchained cookies get --urls https://example.com https://api.example.com
 unchained cookies set '[{"name":"session","value":"abc","domain":".example.com"}]'
 ```
 

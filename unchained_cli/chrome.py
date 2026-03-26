@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 _CONNECT_TIMEOUT = 5.0   # seconds to open HTTP connection to Chrome
 _CMD_TIMEOUT     = 30.0  # seconds to wait for a CDP command response
+_DOM_POLL_INTERVAL = 0.2
+_NETWORK_IDLE_WINDOW = 0.5
 
 
 class CDPError(RuntimeError):
@@ -90,9 +93,34 @@ class ChromeClient:
     ) -> dict:
         """Send a CDP command and return the result dict."""
         ws_url = self._ws_url_for(tab_id)
-        return asyncio.run(
-            self._async_send(ws_url, method, params or {}, wait_for_event, timeout)
-        )
+        try:
+            return asyncio.run(
+                self._async_send(ws_url, method, params or {}, wait_for_event, timeout)
+            )
+        except asyncio.TimeoutError as exc:
+            detail = f"Timed out after {timeout:.1f}s while waiting for {method}"
+            if wait_for_event:
+                detail += f" / {wait_for_event}"
+            raise CDPError(detail) from exc
+        except OSError as exc:
+            raise CDPError(f"Could not connect to Chrome tab websocket: {exc}") from exc
+
+    @staticmethod
+    def _require_websockets():
+        try:
+            import websockets
+        except ImportError as exc:
+            raise CDPError(
+                "Missing dependency 'websockets'. Run: pip install websockets"
+            ) from exc
+        return websockets
+
+    @staticmethod
+    def _runtime_value(result: dict) -> Any:
+        obj = result.get("result", {})
+        if obj.get("subtype") == "error":
+            raise CDPError(obj.get("description", "JS error"))
+        return obj.get("value")
 
     async def _async_send(
         self,
@@ -102,12 +130,7 @@ class ChromeClient:
         wait_for_event: str | None,
         timeout: float,
     ) -> dict:
-        try:
-            import websockets
-        except ImportError:
-            raise CDPError(
-                "Missing dependency 'websockets'. Run: pip install websockets"
-            )
+        websockets = self._require_websockets()
 
         async def _run() -> dict:
             async with websockets.connect(ws_url, ping_timeout=None) as ws:
@@ -204,10 +227,7 @@ class ChromeClient:
             "returnByValue": True,
             "awaitPromise": True,
         })
-        obj = result.get("result", {})
-        if obj.get("subtype") == "error":
-            raise CDPError(obj.get("description", "JS error"))
-        val = obj.get("value")
+        val = self._runtime_value(result)
         # If JSON string returned from expression, parse it
         if isinstance(val, str):
             try:
@@ -216,17 +236,36 @@ class ChromeClient:
                 pass
         return val
 
+    def _resolve_frame_id(self, tab_id: str, frame_id: str) -> str:
+        if frame_id.isdigit():
+            index = int(frame_id)
+            for frame in self.list_frames(tab_id):
+                if frame["index"] == index:
+                    return frame["frameId"]
+            raise CDPError(f"Frame index not found: {frame_id}")
+
+        for frame in self.list_frames(tab_id):
+            if frame["frameId"] == frame_id:
+                return frame_id
+        raise CDPError(f"Frame not found: {frame_id}")
+
     def js_eval_frame(self, tab_id: str, frame_id: str, expression: str) -> Any:
+        resolved_frame_id = self._resolve_frame_id(tab_id, frame_id)
+        world = self.send(tab_id, "Page.createIsolatedWorld", {
+            "frameId": resolved_frame_id,
+            "worldName": "unchained_cli",
+        })
+        context_id = world.get("executionContextId")
+        if context_id is None:
+            raise CDPError(f"Could not create execution context for frame: {frame_id}")
+
         result = self.send(tab_id, "Runtime.evaluate", {
             "expression": expression,
             "returnByValue": True,
             "awaitPromise": True,
-            "contextId": int(frame_id) if frame_id.isdigit() else None,
+            "contextId": context_id,
         })
-        obj = result.get("result", {})
-        if obj.get("subtype") == "error":
-            raise CDPError(obj.get("description", "JS error"))
-        return obj.get("value")
+        return self._runtime_value(result)
 
     def key_press(self, tab_id: str, key: str, modifiers: int = 0) -> None:
         for event_type in ("keyDown", "keyUp"):
@@ -237,26 +276,98 @@ class ChromeClient:
             })
 
     def wait_ready(self, tab_id: str, strategy: str = "both", timeout: float = 30.0) -> str:
-        if strategy in ("dom", "both"):
-            # Poll document.readyState
-            import time
+        ws_url = self._ws_url_for(tab_id)
+        try:
+            return asyncio.run(self._async_wait_ready(ws_url, strategy, timeout))
+        except asyncio.TimeoutError as exc:
+            raise CDPError(
+                f"Timed out after {timeout:.1f}s while waiting for page readiness "
+                f"(strategy={strategy})"
+            ) from exc
+
+    async def _async_wait_ready(
+        self,
+        ws_url: str,
+        strategy: str,
+        timeout: float,
+    ) -> str:
+        websockets = self._require_websockets()
+        wants_dom = strategy in ("dom", "both")
+        wants_network = strategy in ("network", "both")
+
+        async with websockets.connect(ws_url, ping_timeout=None) as ws:
+            await ws.send(json.dumps({"id": 0, "method": "Runtime.enable", "params": {}}))
+            if wants_network:
+                await ws.send(json.dumps({"id": 0, "method": "Network.enable", "params": {}}))
+
+            next_cmd_id = 1
+            pending_dom_check_id: int | None = None
+            next_dom_poll_at = 0.0
+            inflight_requests: set[str] = set()
+            last_network_activity = time.monotonic()
             deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                state = self.send(tab_id, "Runtime.evaluate", {
-                    "expression": "document.readyState",
-                    "returnByValue": True,
-                })
-                if state.get("result", {}).get("value") == "complete":
-                    break
-                time.sleep(0.2)
-        if strategy in ("network", "both"):
-            self.send(
-                tab_id, "Page.navigate",
-                {"url": "javascript:void(0)"},  # no-op nav just to flush events
-                wait_for_event="Page.loadEventFired",
-                timeout=timeout,
-            )
-        return "ready"
+            dom_ready = not wants_dom
+
+            async def send_dom_check() -> None:
+                nonlocal next_cmd_id, pending_dom_check_id, next_dom_poll_at
+                if not wants_dom or dom_ready or pending_dom_check_id is not None:
+                    return
+                pending_dom_check_id = next_cmd_id
+                next_cmd_id += 1
+                next_dom_poll_at = time.monotonic() + _DOM_POLL_INTERVAL
+                await ws.send(json.dumps({
+                    "id": pending_dom_check_id,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "document.readyState",
+                        "returnByValue": True,
+                    },
+                }))
+
+            await send_dom_check()
+
+            while True:
+                now = time.monotonic()
+                network_ready = (
+                    not wants_network
+                    or (
+                        not inflight_requests
+                        and now - last_network_activity >= _NETWORK_IDLE_WINDOW
+                    )
+                )
+                if dom_ready and network_ready:
+                    return "ready"
+                if now >= deadline:
+                    raise asyncio.TimeoutError
+                if wants_dom and not dom_ready and pending_dom_check_id is None and now >= next_dom_poll_at:
+                    await send_dom_check()
+
+                recv_timeout = min(_DOM_POLL_INTERVAL, max(0.0, deadline - now))
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
+                except asyncio.TimeoutError:
+                    continue
+
+                msg = json.loads(raw)
+
+                if msg.get("id") == pending_dom_check_id:
+                    pending_dom_check_id = None
+                    dom_ready = self._runtime_value(msg.get("result", {})) == "complete"
+                    continue
+
+                if not wants_network:
+                    continue
+
+                method = msg.get("method")
+                params = msg.get("params", {})
+                request_id = params.get("requestId")
+
+                if method == "Network.requestWillBeSent" and request_id:
+                    inflight_requests.add(request_id)
+                    last_network_activity = time.monotonic()
+                elif method in ("Network.loadingFinished", "Network.loadingFailed") and request_id:
+                    inflight_requests.discard(request_id)
+                    last_network_activity = time.monotonic()
 
     def get_cookies(self, tab_id: str, urls: list[str] | None = None) -> list[dict]:
         if urls:
