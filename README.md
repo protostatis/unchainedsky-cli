@@ -30,6 +30,9 @@ export UNCHAINED_PORT=9223
 unchained tabs
 ```
 
+This env var is read by every command, so you only need to export it once per
+shell session.
+
 ## Usage
 
 ```
