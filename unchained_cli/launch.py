@@ -179,6 +179,16 @@ def launch_chrome(
     extra_args: list[str] | None = None,
 ) -> dict[str, Any]:
     """Ensure a Chrome instance with CDP is available on the requested port."""
+    _BLOCKED_EXTRA_ARG_PREFIXES = ("--user-data-dir", "--remote-debugging-port")
+    if extra_args:
+        for arg in extra_args:
+            for blocked in _BLOCKED_EXTRA_ARG_PREFIXES:
+                if arg.startswith(blocked):
+                    raise LaunchError(
+                        f"extra_args may not override {blocked}; "
+                        "use the port= or profile= parameters instead."
+                    )
+
     host = DEFAULT_HOST
     startup_url = startup_url or "about:blank"
     profile_name = _sanitize_profile(profile)

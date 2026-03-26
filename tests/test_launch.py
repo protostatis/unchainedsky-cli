@@ -211,6 +211,39 @@ class LaunchTests(unittest.TestCase):
             with self.assertRaisesRegex(launch.LaunchError, "No Chrome/Chromium binary found"):
                 launch.launch_chrome()
 
+    def test_launch_chrome_already_running_uses_ensure_page_tab_for_blank_url(self):
+        with mock.patch.object(
+            launch,
+            "_version_json",
+            return_value={"Browser": "Chrome"},
+        ), mock.patch.object(launch, "_ensure_page_tab", return_value=True) as ensure_tab, \
+                mock.patch.object(launch, "_open_tab") as open_tab:
+            result = launch.launch_chrome(port=9222, startup_url="about:blank")
+
+        self.assertTrue(result["already_running"])
+        ensure_tab.assert_called_once_with("127.0.0.1", 9222, "about:blank")
+        open_tab.assert_not_called()
+
+    def test_build_launch_command_linux_binary(self):
+        with mock.patch.object(launch.platform, "system", return_value="Linux"):
+            cmd = launch._build_launch_command(
+                "/usr/bin/google-chrome",
+                profile_dir=Path("/tmp/chrome_default"),
+                port=9222,
+                startup_url="about:blank",
+                headless=False,
+                extra_args=None,
+            )
+
+        self.assertEqual(cmd[0], "/usr/bin/google-chrome")
+        self.assertIn("--user-data-dir=/tmp/chrome_default", cmd)
+        self.assertIn("--remote-debugging-port=9222", cmd)
+        self.assertNotIn("open", cmd)
+
+    def test_launch_chrome_rejects_user_data_dir_in_extra_args(self):
+        with self.assertRaisesRegex(launch.LaunchError, "--user-data-dir"):
+            launch.launch_chrome(extra_args=["--user-data-dir=/tmp/evil"])
+
     def test_find_chrome_binary_raises_on_bad_env_override(self):
         with mock.patch.dict(os.environ, {"UNCHAINED_CHROME_BIN": "/nonexistent/chrome"}):
             with self.assertRaisesRegex(launch.LaunchError, "UNCHAINED_CHROME_BIN"):
