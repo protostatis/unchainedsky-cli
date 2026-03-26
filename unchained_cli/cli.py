@@ -5,7 +5,7 @@ Usage:
 
 Global options:
     --port PORT     Chrome remote debugging port (default: 9222, env: UNCHAINED_PORT)
-    --tab  TAB_ID   Target tab ID or 'auto' for frontmost (default: auto)
+    --tab  TAB_ID   Target tab ID or 'auto' for the first page tab (default: auto)
     --json          Output raw JSON where applicable
 
 Commands:
@@ -22,7 +22,7 @@ Commands:
            [--modifiers N]       Modifier bitmask: 1=Alt 2=Ctrl 4=Meta 8=Shift
     wait   [--strategy STRAT]    Wait for page load (dom/network/both, default: both)
            [--timeout N]         Timeout in seconds (default: 30)
-    cookies get [--urls ...]     Get cookies for URLs
+    cookies get [--urls URL ...] Get cookies for URLs
     cookies set <json>           Inject cookies from JSON array
     frames                       List iframes on the page
     ddm    [flags ...]           DOM Density Map (requires ddm binary)
@@ -68,6 +68,9 @@ def cmd_tabs(client: ChromeClient, args: argparse.Namespace) -> None:
     if not tabs:
         print("No page tabs open.")
         return
+    if args.json:
+        print(json.dumps(tabs, indent=2))
+        return
     for i, t in enumerate(tabs):
         marker = " *" if i == 0 else "  "
         title = t.get("title", "")[:60]
@@ -79,8 +82,16 @@ def cmd_tabs(client: ChromeClient, args: argparse.Namespace) -> None:
 def cmd_navigate(client: ChromeClient, args: argparse.Namespace) -> None:
     tab_id = client.resolve_tab(args.tab)
     result = client.navigate(tab_id, args.url)
-    title = result.get("frameId", "")
-    final = result.get("currentURL", args.url)
+    final = client.js_eval(tab_id, "window.location.href")
+    if not isinstance(final, str) or not final:
+        final = args.url
+    if args.json:
+        print(json.dumps({
+            "tab_id": tab_id,
+            "url": final,
+            "navigation": result,
+        }, indent=2))
+        return
     print(f"Navigated → {final}")
 
 
@@ -147,7 +158,7 @@ def cmd_wait(client: ChromeClient, args: argparse.Namespace) -> None:
 
 def cmd_cookies_get(client: ChromeClient, args: argparse.Namespace) -> None:
     tab_id = client.resolve_tab(args.tab)
-    urls   = [u.strip() for u in args.urls.split(",")] if getattr(args, "urls", None) else None
+    urls   = args.urls or None
     cookies = client.get_cookies(tab_id, urls)
     if args.json:
         print(json.dumps(cookies, indent=2))
@@ -203,7 +214,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tab", default="auto", metavar="TAB_ID",
-        help="Target tab ID or 'auto' (default: auto)",
+        help="Target tab ID or 'auto' for the first page tab (default: auto)",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -261,8 +272,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cookies_sub = cookies_p.add_subparsers(dest="cookies_command", metavar="action")
 
     cg = cookies_sub.add_parser("get", help="Get cookies")
-    cg.add_argument("--urls", metavar="URL1,URL2",
-                    help="Comma-separated URLs to filter by domain")
+    cg.add_argument("--urls", nargs="+", metavar="URL",
+                    help="One or more URLs to filter by domain")
 
     cs = cookies_sub.add_parser("set", help="Inject cookies from JSON array")
     cs.add_argument("cookie_json", metavar="JSON",

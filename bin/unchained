@@ -7,4 +7,15 @@ set -euo pipefail
 # virtualenv_install_with_resources), fall back to whatever python3 is in PATH.
 : "${UNCHAINED_PYTHON:=python3}"
 
+if ! command -v "$UNCHAINED_PYTHON" >/dev/null 2>&1; then
+  echo "Error: Python interpreter not found: $UNCHAINED_PYTHON" >&2
+  exit 1
+fi
+
+if ! "$UNCHAINED_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+  echo "Error: unchained requires Python 3.10+." >&2
+  echo "Set UNCHAINED_PYTHON to a compatible interpreter." >&2
+  exit 1
+fi
+
 exec "$UNCHAINED_PYTHON" -m unchained_cli "$@"
