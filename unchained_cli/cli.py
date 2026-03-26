@@ -360,8 +360,6 @@ def main() -> None:
         match args.command:
             case "tabs":
                 cmd_tabs(client, args)
-            case "launch":
-                cmd_launch(args)
             case "navigate":
                 cmd_navigate(client, args)
             case "click":

@@ -1,6 +1,7 @@
 """Chrome launch helpers for hardened local CDP startup."""
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -117,13 +118,7 @@ def _json_get(host: str, port: int, path: str) -> Any:
         f"http://{host}:{port}{path}",
         timeout=_CONNECT_TIMEOUT,
     ) as resp:
-        return json_loads(resp.read())
-
-
-def json_loads(raw: bytes) -> Any:
-    import json
-
-    return json.loads(raw)
+        return json.loads(resp.read())
 
 
 def _version_json(host: str, port: int) -> dict[str, Any] | None:
@@ -152,7 +147,7 @@ def _open_tab(host: str, port: int, url: str) -> dict[str, Any] | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as resp:
-            data = json_loads(resp.read())
+            data = json.loads(resp.read())
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise LaunchError(f"Failed to open a tab via Chrome CDP on {host}:{port}: {exc}") from exc
     if not isinstance(data, dict):
