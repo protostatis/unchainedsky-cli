@@ -22,6 +22,14 @@ Chrome must be running with remote debugging enabled:
 open -a "Google Chrome" --args --remote-debugging-port=9222
 ```
 
+If you use a non-default CDP port regularly, set `UNCHAINED_PORT` instead of
+passing `--port` on every command:
+
+```bash
+export UNCHAINED_PORT=9223
+unchained tabs
+```
+
 ## Usage
 
 ```
