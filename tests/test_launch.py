@@ -216,6 +216,43 @@ class LaunchTests(unittest.TestCase):
             with self.assertRaisesRegex(launch.LaunchError, "UNCHAINED_CHROME_BIN"):
                 launch._find_chrome_binary()
 
+    def test_launch_chrome_raises_on_cdp_timeout(self):
+        process = FakeProcess(pid=1234)
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            launch,
+            "DEFAULT_DATA_DIR",
+            Path(tmpdir),
+        ), mock.patch.object(
+            launch.platform,
+            "system",
+            return_value="Linux",
+        ), mock.patch.object(
+            launch,
+            "_version_json",
+            return_value=None,
+        ), mock.patch.object(
+            launch,
+            "_find_chrome_binary",
+            return_value="/tmp/chrome",
+        ), mock.patch.object(
+            launch.subprocess,
+            "Popen",
+            return_value=process,
+        ), mock.patch.object(
+            launch.time,
+            "monotonic",
+            side_effect=[0.0, 0.1, 0.2, 99.0],
+        ), mock.patch.object(
+            launch.time,
+            "sleep",
+        ):
+            with self.assertRaisesRegex(launch.LaunchError, "did not expose CDP"):
+                launch.launch_chrome(port=9222, timeout=1.0)
+
+    def test_sanitize_profile_raises_on_long_name(self):
+        with self.assertRaisesRegex(launch.LaunchError, "too long"):
+            launch._sanitize_profile("a" * 33)
+
 
 if __name__ == "__main__":
     unittest.main()

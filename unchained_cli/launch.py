@@ -25,7 +25,12 @@ class LaunchError(RuntimeError):
 
 def _sanitize_profile(name: str) -> str:
     sanitized = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name.strip())
-    return sanitized[:32] or "default"
+    if len(sanitized) > 32:
+        raise LaunchError(
+            f"Profile name {name!r} is too long after sanitization ({len(sanitized)} chars); "
+            "use a name that is 32 characters or fewer."
+        )
+    return sanitized or "default"
 
 
 def _find_chrome_binary() -> str | None:

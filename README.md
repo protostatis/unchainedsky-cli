@@ -24,12 +24,33 @@ unchained launch
 
 Fallback manual launch:
 
+**macOS:**
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --user-data-dir="$HOME/.unchained/chrome_default" \
   --remote-debugging-port=9222 \
   --no-first-run \
   --no-default-browser-check \
+  about:blank
+```
+
+**Linux:**
+```bash
+google-chrome \
+  --user-data-dir="$HOME/.unchained/chrome_default" \
+  --remote-debugging-port=9222 \
+  --no-first-run \
+  --no-default-browser-check \
+  about:blank
+```
+
+**Windows (PowerShell):**
+```powershell
+& "$Env:PROGRAMFILES\Google\Chrome\Application\chrome.exe" `
+  --user-data-dir="$Env:USERPROFILE\.unchained\chrome_default" `
+  --remote-debugging-port=9222 `
+  --no-first-run `
+  --no-default-browser-check `
   about:blank
 ```
 
