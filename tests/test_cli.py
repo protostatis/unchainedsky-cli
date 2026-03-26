@@ -36,6 +36,36 @@ class FakeClient:
 
 
 class CliCommandTests(unittest.TestCase):
+    def test_cmd_launch_reports_existing_chrome_with_unknown_profile_dir(self):
+        args = SimpleNamespace(
+            port=9222,
+            profile="alt",
+            headless=False,
+            url="https://example.com",
+            timeout=15.0,
+            chrome_args=[],
+            json=False,
+        )
+
+        stdout = io.StringIO()
+        with mock.patch.object(
+            cli._launch,
+            "launch_chrome",
+            return_value={
+                "already_running": True,
+                "host": "127.0.0.1",
+                "port": 9222,
+                "profile_dir": None,
+                "startup_url": "https://example.com",
+            },
+        ), redirect_stdout(stdout):
+            cli.cmd_launch(args)
+
+        text = stdout.getvalue()
+        self.assertIn("Chrome ready → http://127.0.0.1:9222 (already running)", text)
+        self.assertIn("Profile dir → unknown (attached to existing Chrome on this port)", text)
+        self.assertIn("Startup URL → https://example.com", text)
+
     def test_cmd_launch_reports_started_chrome(self):
         args = SimpleNamespace(
             port=9222,
@@ -66,6 +96,36 @@ class CliCommandTests(unittest.TestCase):
         self.assertIn("Chrome started → http://127.0.0.1:9222 (PID 1234)", text)
         self.assertIn("Profile dir → /tmp/profile", text)
         self.assertIn("Startup URL → https://example.com", text)
+
+    def test_cmd_launch_omits_pid_when_unavailable(self):
+        args = SimpleNamespace(
+            port=9222,
+            profile="default",
+            headless=False,
+            url="https://example.com",
+            timeout=15.0,
+            chrome_args=[],
+            json=False,
+        )
+
+        stdout = io.StringIO()
+        with mock.patch.object(
+            cli._launch,
+            "launch_chrome",
+            return_value={
+                "already_running": False,
+                "host": "127.0.0.1",
+                "port": 9222,
+                "profile_dir": "/tmp/profile",
+                "startup_url": "https://example.com",
+            },
+        ), redirect_stdout(stdout):
+            cli.cmd_launch(args)
+
+        text = stdout.getvalue()
+        self.assertIn("Chrome started → http://127.0.0.1:9222", text)
+        self.assertNotIn("(PID", text)
+        self.assertIn("Profile dir → /tmp/profile", text)
 
     def test_cmd_tabs_outputs_json(self):
         client = FakeClient()

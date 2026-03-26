@@ -96,9 +96,14 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     if result["already_running"]:
         print(f"Chrome ready → http://{result['host']}:{result['port']} (already running)")
+        print("Profile dir → unknown (attached to existing Chrome on this port)")
     else:
-        print(f"Chrome started → http://{result['host']}:{result['port']} (PID {result['pid']})")
-    print(f"Profile dir → {result['profile_dir']}")
+        pid = result.get("pid")
+        if pid is None:
+            print(f"Chrome started → http://{result['host']}:{result['port']}")
+        else:
+            print(f"Chrome started → http://{result['host']}:{result['port']} (PID {pid})")
+        print(f"Profile dir → {result['profile_dir']}")
     print(f"Startup URL → {result['startup_url']}")
 
 

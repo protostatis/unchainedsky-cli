@@ -150,9 +150,14 @@ def _open_tab(host: str, port: int, url: str) -> dict[str, Any] | None:
         f"http://{host}:{port}/json/new?{encoded}",
         method="PUT",
     )
-    with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as resp:
-        data = json_loads(resp.read())
-    return data if isinstance(data, dict) else None
+    try:
+        with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as resp:
+            data = json_loads(resp.read())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise LaunchError(f"Failed to open a tab via Chrome CDP on {host}:{port}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise LaunchError(f"Chrome CDP returned an invalid /json/new response on {host}:{port}")
+    return data
 
 
 def _ensure_page_tab(host: str, port: int, startup_url: str) -> bool:
@@ -189,8 +194,10 @@ def launch_chrome(
             "already_running": True,
             "host": host,
             "port": port,
-            "profile": profile_name,
-            "profile_dir": str(profile_dir),
+            "profile": None,
+            "profile_dir": None,
+            "requested_profile": profile_name,
+            "requested_profile_dir": str(profile_dir),
             "startup_url": startup_url,
             "opened_tab": opened_tab,
             "headless": headless,
@@ -213,19 +220,30 @@ def launch_chrome(
     )
     uses_launcher_wrapper = bool(cmd) and cmd[0] == "open"
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        raise LaunchError(f"Failed to launch Chrome: {exc}") from exc
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not uses_launcher_wrapper and proc.poll() is not None:
-            raise LaunchError(
-                "Chrome exited before CDP became ready "
-                f"(exit code {proc.returncode}). Try a different --profile if "
-                f"{profile_dir} is already in use."
-            )
+        exit_code = proc.poll()
+        if exit_code is not None:
+            if uses_launcher_wrapper:
+                if exit_code != 0:
+                    raise LaunchError(
+                        "Chrome launcher exited before CDP became ready "
+                        f"(exit code {exit_code}). Check the Chrome app path and launch flags."
+                    )
+            else:
+                raise LaunchError(
+                    "Chrome exited before CDP became ready "
+                    f"(exit code {exit_code}). Try a different --profile if "
+                    f"{profile_dir} is already in use."
+                )
         if _version_json(host, port):
             opened_tab = _ensure_page_tab(host, port, startup_url)
-            return {
+            result = {
                 "already_running": False,
                 "host": host,
                 "port": port,
@@ -234,9 +252,11 @@ def launch_chrome(
                 "startup_url": startup_url,
                 "opened_tab": opened_tab,
                 "headless": headless,
-                "pid": proc.pid,
                 "chrome_bin": chrome_bin,
             }
+            if not uses_launcher_wrapper:
+                result["pid"] = proc.pid
+            return result
         time.sleep(0.5)
 
     raise LaunchError(

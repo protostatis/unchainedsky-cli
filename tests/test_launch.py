@@ -1,4 +1,5 @@
 import tempfile
+import urllib.error
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -28,8 +29,20 @@ class LaunchTests(unittest.TestCase):
             result = launch.launch_chrome(port=9222, startup_url="https://example.com")
 
         self.assertTrue(result["already_running"])
+        self.assertIsNone(result["profile"])
+        self.assertIsNone(result["profile_dir"])
+        self.assertEqual(result["requested_profile"], "default")
         open_tab.assert_called_once_with("127.0.0.1", 9222, "https://example.com")
         popen.assert_not_called()
+
+    def test_open_tab_wraps_transport_errors(self):
+        with mock.patch.object(
+            launch.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.URLError("boom"),
+        ):
+            with self.assertRaisesRegex(launch.LaunchError, "Failed to open a tab via Chrome CDP"):
+                launch._open_tab("127.0.0.1", 9222, "https://example.com")
 
     def test_launch_chrome_starts_binary_with_hardened_flags(self):
         process = FakeProcess(pid=4321)
@@ -79,14 +92,15 @@ class LaunchTests(unittest.TestCase):
         ensure_tab.assert_called_once_with("127.0.0.1", 9223, "https://example.com")
 
     def test_launch_command_uses_open_na_for_macos_app_bundle(self):
-        cmd = launch._build_launch_command(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            profile_dir=Path("/tmp/chrome_demo"),
-            port=9222,
-            startup_url="about:blank",
-            headless=False,
-            extra_args=["--incognito"],
-        )
+        with mock.patch.object(launch.platform, "system", return_value="Darwin"):
+            cmd = launch._build_launch_command(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                profile_dir=Path("/tmp/chrome_demo"),
+                port=9222,
+                startup_url="about:blank",
+                headless=False,
+                extra_args=["--incognito"],
+            )
 
         self.assertEqual(cmd[:4], ["open", "-na", "/Applications/Google Chrome.app", "--args"])
         self.assertIn("--user-data-dir=/tmp/chrome_demo", cmd)
@@ -124,6 +138,32 @@ class LaunchTests(unittest.TestCase):
 
         self.assertFalse(result["already_running"])
         self.assertEqual(result["port"], 9333)
+        self.assertNotIn("pid", result)
+
+    def test_launch_chrome_raises_on_open_wrapper_failure(self):
+        process = FakeProcess(pid=9999, returncode=1)
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            launch,
+            "DEFAULT_DATA_DIR",
+            Path(tmpdir),
+        ), mock.patch.object(
+            launch,
+            "_version_json",
+            return_value=None,
+        ), mock.patch.object(
+            launch,
+            "_find_chrome_binary",
+            return_value="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ), mock.patch.object(
+            launch.subprocess,
+            "Popen",
+            return_value=process,
+        ), mock.patch.object(
+            launch.time,
+            "sleep",
+        ):
+            with self.assertRaisesRegex(launch.LaunchError, "Chrome launcher exited before CDP became ready"):
+                launch.launch_chrome(port=9333, timeout=1.0)
 
     def test_launch_chrome_adds_headless_flags(self):
         process = FakeProcess()
