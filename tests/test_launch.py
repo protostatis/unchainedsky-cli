@@ -1,3 +1,4 @@
+import os
 import tempfile
 import urllib.error
 import unittest
@@ -209,6 +210,11 @@ class LaunchTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(launch.LaunchError, "No Chrome/Chromium binary found"):
                 launch.launch_chrome()
+
+    def test_find_chrome_binary_raises_on_bad_env_override(self):
+        with mock.patch.dict(os.environ, {"UNCHAINED_CHROME_BIN": "/nonexistent/chrome"}):
+            with self.assertRaisesRegex(launch.LaunchError, "UNCHAINED_CHROME_BIN"):
+                launch._find_chrome_binary()
 
 
 if __name__ == "__main__":

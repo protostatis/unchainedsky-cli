@@ -15,9 +15,7 @@ from typing import Any
 
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_DATA_DIR = Path(
-    os.environ.get("UNCHAINED_DATA_DIR", Path.home() / ".unchained")
-)
+DEFAULT_DATA_DIR = Path.home() / ".unchained"
 _CONNECT_TIMEOUT = 2.0
 
 
@@ -33,7 +31,11 @@ def _sanitize_profile(name: str) -> str:
 def _find_chrome_binary() -> str | None:
     env = os.environ.get("UNCHAINED_CHROME_BIN")
     if env:
-        return env if os.path.isfile(env) and os.access(env, os.X_OK) else None
+        if os.path.isfile(env) and os.access(env, os.X_OK):
+            return env
+        raise LaunchError(
+            f"UNCHAINED_CHROME_BIN={env!r} is not an executable file."
+        )
 
     candidates = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -175,8 +177,9 @@ def launch_chrome(
     host = DEFAULT_HOST
     startup_url = startup_url or "about:blank"
     profile_name = _sanitize_profile(profile)
-    profile_dir = DEFAULT_DATA_DIR / f"chrome_{profile_name}"
-    DEFAULT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
+    profile_dir = data_dir / f"chrome_{profile_name}"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     if _version_json(host, port):
         opened_tab = False
@@ -193,6 +196,7 @@ def launch_chrome(
             "profile_dir": None,
             "requested_profile": profile_name,
             "requested_profile_dir": str(profile_dir),
+            "data_dir": str(data_dir),
             "startup_url": startup_url,
             "opened_tab": opened_tab,
             "headless": headless,
@@ -215,11 +219,16 @@ def launch_chrome(
     )
     uses_launcher_wrapper = bool(cmd) and cmd[0] == "open"
 
+    log_path = profile_dir / "chrome.log"
+    log_fh = open(log_path, "wb")
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh)
     except OSError as exc:
+        log_fh.close()
         raise LaunchError(f"Failed to launch Chrome: {exc}") from exc
+    log_fh.close()
 
+    sleep_interval = 0.1
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         exit_code = proc.poll()
@@ -244,6 +253,8 @@ def launch_chrome(
                 "port": port,
                 "profile": profile_name,
                 "profile_dir": str(profile_dir),
+                "data_dir": str(data_dir),
+                "chrome_log": str(log_path),
                 "startup_url": startup_url,
                 "opened_tab": opened_tab,
                 "headless": headless,
@@ -252,7 +263,8 @@ def launch_chrome(
             if not uses_launcher_wrapper:
                 result["pid"] = proc.pid
             return result
-        time.sleep(0.5)
+        time.sleep(sleep_interval)
+        sleep_interval = min(sleep_interval * 2, 0.5)
 
     raise LaunchError(
         f"Chrome did not expose CDP on {host}:{port} within {timeout:.1f}s. "
