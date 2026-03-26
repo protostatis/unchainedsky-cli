@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from unchained_cli import cli
 
@@ -35,6 +36,37 @@ class FakeClient:
 
 
 class CliCommandTests(unittest.TestCase):
+    def test_cmd_launch_reports_started_chrome(self):
+        args = SimpleNamespace(
+            port=9222,
+            profile="default",
+            headless=False,
+            url="https://example.com",
+            timeout=15.0,
+            chrome_args=[],
+            json=False,
+        )
+
+        stdout = io.StringIO()
+        with mock.patch.object(
+            cli._launch,
+            "launch_chrome",
+            return_value={
+                "already_running": False,
+                "host": "127.0.0.1",
+                "port": 9222,
+                "pid": 1234,
+                "profile_dir": "/tmp/profile",
+                "startup_url": "https://example.com",
+            },
+        ), redirect_stdout(stdout):
+            cli.cmd_launch(args)
+
+        text = stdout.getvalue()
+        self.assertIn("Chrome started → http://127.0.0.1:9222 (PID 1234)", text)
+        self.assertIn("Profile dir → /tmp/profile", text)
+        self.assertIn("Startup URL → https://example.com", text)
+
     def test_cmd_tabs_outputs_json(self):
         client = FakeClient()
         args = SimpleNamespace(json=True)
@@ -89,6 +121,7 @@ class CliSmokeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Browser automation over local Chrome CDP.", result.stdout)
+        self.assertIn("launch [url]", result.stdout)
         self.assertIn("cookies get [--urls URL ...]", result.stdout)
 
 

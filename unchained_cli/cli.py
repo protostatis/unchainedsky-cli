@@ -9,6 +9,7 @@ Global options:
     --json          Output raw JSON where applicable
 
 Commands:
+    launch [url]                 Launch Chrome with hardened CDP startup
     tabs                         List open tabs
     navigate <url>               Navigate to URL
     click  --x X --y Y           Click at coordinates
@@ -37,6 +38,7 @@ from typing import NoReturn
 
 from .chrome import ChromeClient, CDPError
 from . import ddm as _ddm
+from . import launch as _launch
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,27 @@ def cmd_tabs(client: ChromeClient, args: argparse.Namespace) -> None:
         url   = t.get("url",   "")[:80]
         print(f"{marker} [{t['id']}]  {title}")
         print(f"      {url}")
+
+
+def cmd_launch(args: argparse.Namespace) -> None:
+    result = _launch.launch_chrome(
+        port=args.port,
+        profile=args.profile,
+        headless=args.headless,
+        startup_url=args.url,
+        timeout=args.timeout,
+        extra_args=args.chrome_args,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+
+    if result["already_running"]:
+        print(f"Chrome ready → http://{result['host']}:{result['port']} (already running)")
+    else:
+        print(f"Chrome started → http://{result['host']}:{result['port']} (PID {result['pid']})")
+    print(f"Profile dir → {result['profile_dir']}")
+    print(f"Startup URL → {result['startup_url']}")
 
 
 def cmd_navigate(client: ChromeClient, args: argparse.Namespace) -> None:
@@ -223,6 +246,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", metavar="command")
 
+    # launch
+    p = sub.add_parser("launch", help="Launch Chrome with hardened CDP startup")
+    p.add_argument("url", nargs="?", default="about:blank",
+                   help="Startup URL or page to open if Chrome is already running")
+    p.add_argument("--profile", default="default", metavar="NAME",
+                   help="Profile name for the dedicated Chrome user-data-dir (default: default)")
+    p.add_argument("--headless", action="store_true",
+                   help="Launch Chrome headless")
+    p.add_argument("--timeout", type=float, default=15.0, metavar="SECS",
+                   help="How long to wait for CDP readiness (default: 15)")
+    p.add_argument("--chrome-arg", dest="chrome_args", action="append", default=[],
+                   metavar="ARG", help="Additional Chrome flag (repeatable)")
+
     # tabs
     sub.add_parser("tabs", help="List open tabs")
 
@@ -302,10 +338,16 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
-    # DDM bypasses the Chrome client — it shells out to a binary
+    # Commands that do not need an active CDP websocket session.
     if args.command == "ddm":
         cmd_ddm(args)
         return
+    if args.command == "launch":
+        try:
+            cmd_launch(args)
+            return
+        except _launch.LaunchError as e:
+            _die(str(e))
 
     client = ChromeClient(port=args.port)
 
@@ -313,6 +355,8 @@ def main() -> None:
         match args.command:
             case "tabs":
                 cmd_tabs(client, args)
+            case "launch":
+                cmd_launch(args)
             case "navigate":
                 cmd_navigate(client, args)
             case "click":
@@ -343,6 +387,8 @@ def main() -> None:
                 sys.exit(1)
 
     except CDPError as e:
+        _die(str(e))
+    except _launch.LaunchError as e:
         _die(str(e))
     except KeyboardInterrupt:
         sys.exit(130)

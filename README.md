@@ -16,10 +16,21 @@ python3.10 -m pip install unchainedsky-cli
 
 ## Requirements
 
-Chrome must be running with remote debugging enabled:
+Recommended: let `unchained` launch Chrome with a dedicated user-data-dir and CDP port:
 
 ```bash
-open -a "Google Chrome" --args --remote-debugging-port=9222
+unchained launch
+```
+
+Fallback manual launch:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --user-data-dir="$HOME/.unchained/chrome_default" \
+  --remote-debugging-port=9222 \
+  --no-first-run \
+  --no-default-browser-check \
+  about:blank
 ```
 
 Python 3.10+ is required.
@@ -34,6 +45,7 @@ unchained [--port PORT] [--tab TAB_ID] <command> [args]
 
 | Command | Description |
 |---------|-------------|
+| `launch [url]` | Launch Chrome with hardened CDP startup |
 | `tabs` | List open tabs |
 | `navigate <url>` | Navigate to URL |
 | `click --x X --y Y` | Click at coordinates |
@@ -52,6 +64,11 @@ unchained [--port PORT] [--tab TAB_ID] <command> [args]
 ### Examples
 
 ```bash
+# Start a dedicated Chrome with CDP enabled
+unchained launch
+unchained launch https://example.com
+unchained --port 9223 launch --profile alt https://example.com
+
 # Navigate and interact
 unchained navigate https://example.com
 unchained click --selector "button.submit"
@@ -89,4 +106,6 @@ Or set `UNCHAINED_DDM_BIN=/path/to/ddm`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UNCHAINED_PORT` | `9222` | Chrome remote debugging port |
+| `UNCHAINED_DATA_DIR` | `~/.unchained` | Base directory for dedicated Chrome profiles |
+| `UNCHAINED_CHROME_BIN` | — | Chrome/Chromium binary override for `launch` |
 | `UNCHAINED_DDM_BIN` | — | Path to ddm binary override |
