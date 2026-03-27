@@ -7,13 +7,13 @@ from unchained_cli import ddm
 
 
 class DdmTests(unittest.TestCase):
-    def test_run_ddm_reports_missing_binary(self):
-        stderr = io.StringIO()
-        with mock.patch.object(ddm, "_find_binary", return_value=None), redirect_stderr(stderr):
-            code = ddm.run_ddm(9222, "auto", [])
+    def test_run_ddm_falls_back_to_engine_when_no_binary(self):
+        """When no binary is found, DDM falls back to the Python engine."""
+        with mock.patch.object(ddm, "_find_binary", return_value=None), \
+             mock.patch("unchained_cli.ddm_engine.run", side_effect=SystemExit(0)) as engine_run:
+            code = ddm.run_ddm(9222, "auto", ["--help"])
 
-        self.assertEqual(code, 1)
-        self.assertIn("DDM binary not found.", stderr.getvalue())
+        self.assertEqual(code, 0)
 
     def test_run_ddm_invokes_binary(self):
         completed = mock.Mock(returncode=0)

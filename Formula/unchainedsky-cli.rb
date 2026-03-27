@@ -9,15 +9,21 @@ class UnchainedskyCli < Formula
   depends_on "python@3.13"
 
   resource "websockets" do
-    url "https://files.pythonhosted.org/packages/source/w/websockets/websockets-12.0.tar.gz"
-    sha256 "81df9cbcbb6c260de1e007e58c011bfebe2dafc8435107b0537f393dd38c8b1b"
+    url "https://files.pythonhosted.org/packages/source/w/websockets/websockets-16.0.tar.gz"
+    sha256 "a8429ae538944e1e5ebf03da3c0951c7e93b17e50b703a405b38c0e688c18330"
   end
 
   def install
     virtualenv_install_with_resources
+
+    # DDM and Intel are included as Python modules (entry points).
+    # The CLI dispatcher finds them via unchained-ddm / unchained-intel
+    # console_scripts or falls back to the built-in Python engine.
   end
 
   test do
     system bin/"unchained", "--help"
+    system bin/"unchained-ddm", "--help"
+    system bin/"unchained-intel", "--help"
   end
 end

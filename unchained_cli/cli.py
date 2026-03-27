@@ -5,28 +5,41 @@ Usage:
 
 Global options:
     --port PORT     Chrome remote debugging port (default: 9222, env: UNCHAINED_PORT)
-    --tab  TAB_ID   Target tab ID or 'auto' for the first page tab (default: auto)
+    --tab  TAB_ID   Target tab ID, alias, or 'auto' (default: auto)
     --json          Output raw JSON where applicable
 
 Commands:
     launch [url]                 Launch Chrome with hardened CDP startup
+    status                       Check if Chrome is alive
+    kill                         Kill Chrome on this port
     tabs                         List open tabs
+    create_tab [url]             Open a new tab
+    close_tab <tab_id>           Close a tab
     navigate <url>               Navigate to URL
     click  --x X --y Y           Click at coordinates
     click  --selector CSS        Click element by CSS selector
     type   <text>                Type text into focused element
-    scroll [--direction DIR]     Scroll page (up/down/left/right, default: down)
-           [--amount N]          Pixels to scroll (default: 500)
-    screenshot [--output FILE]   Save screenshot (default: screenshot.png)
-    js     <expression>          Evaluate JavaScript and print result
+    press_enter                  Press Enter key
     key    <key>                 Press a key (Enter, Tab, Escape, ArrowDown, …)
            [--modifiers N]       Modifier bitmask: 1=Alt 2=Ctrl 4=Meta 8=Shift
+    scroll [--direction DIR]     Scroll page (up/down/left/right, default: down)
+           [--amount N]          Pixels to scroll (default: 500)
+    submit_form [--selector CSS] Submit a form
+    set_file --selector CSS --files PATH [PATH ...]
+    screenshot [--output FILE]   Save screenshot (default: screenshot.png)
+    js     <expression>          Evaluate JavaScript and print result
+    js_frame <frame> <expr>      Evaluate JS in a specific iframe
+    cdp    <method> [params]     Send raw CDP command
     wait   [--strategy STRAT]    Wait for page load (dom/network/both, default: both)
            [--timeout N]         Timeout in seconds (default: 30)
     cookies get [--urls URL ...] Get cookies for URLs
     cookies set <json>           Inject cookies from JSON array
     frames                       List iframes on the page
-    ddm    [flags ...]           DOM Density Map (requires ddm binary)
+    alias  set <name> <tab_id>   Set a tab alias
+    alias  list                  List tab aliases
+    alias  delete <name>         Delete a tab alias
+    ddm    [flags ...]           DOM Density Map
+    intel  [flags ...]           Page intelligence / extraction strategy
 """
 from __future__ import annotations
 
@@ -121,6 +134,27 @@ def cmd_navigate(client: ChromeClient, args: argparse.Namespace) -> None:
         }, indent=2))
         return
     print(f"Navigated → {final}")
+    # Inline DDM: navigate always returns page layout so the caller
+    # doesn't need a separate DDM call (saves one LLM round-trip).
+    # DDM internally runs Intel probe in the same CDP batch.
+    try:
+        from . import ddm as _ddm_mod
+        import io as _io
+        old_stdout = sys.stdout
+        captured = _io.StringIO()
+        sys.stdout = captured
+        try:
+            _ddm_mod.run_ddm(args.port, tab_id,
+                             ["--llm-2pass", "--cols", "60"])
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+        ddm_output = captured.getvalue().strip()
+        if ddm_output:
+            print(f"\n{ddm_output}")
+    except Exception:
+        pass  # DDM is best-effort after navigate
 
 
 def cmd_click(client: ChromeClient, args: argparse.Namespace) -> None:
@@ -221,6 +255,108 @@ def cmd_frames(client: ChromeClient, args: argparse.Namespace) -> None:
 def cmd_ddm(args: argparse.Namespace) -> None:
     code = _ddm.run_ddm(args.port, args.tab, args.ddm_flags)
     sys.exit(code)
+
+
+def cmd_intel(args: argparse.Namespace) -> None:
+    from . import intel as _intel
+    code = _intel.run_intel(args.port, args.tab, args.intel_flags)
+    sys.exit(code)
+
+
+def cmd_create_tab(client: ChromeClient, args: argparse.Namespace) -> None:
+    url = args.url or "about:blank"
+    info = client.create_tab(url)
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return
+    print(f"Created tab → [{info.get('id', '?')}]  {info.get('url', url)}")
+
+
+def cmd_close_tab(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.close_tab_id)
+    client.close_tab(tab_id)
+    print(f"Closed tab {tab_id}")
+
+
+def cmd_set_file(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.tab)
+    client.set_file(tab_id, args.selector, args.files)
+    print(f"Set {len(args.files)} file(s) on {args.selector!r}")
+
+
+def cmd_press_enter(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.tab)
+    client.key_press(tab_id, "Enter")
+    print("Pressed Enter")
+
+
+def cmd_submit_form(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.tab)
+    result = client.submit_form(tab_id, getattr(args, "selector", None))
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+    method = result.get("method", "?") if isinstance(result, dict) else "?"
+    print(f"Form submitted (via {method})")
+
+
+def cmd_js_frame(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.tab)
+    result = client.js_eval_frame(tab_id, args.frame_id, args.expression)
+    _print_result(result, as_json=args.json)
+
+
+def cmd_cdp(client: ChromeClient, args: argparse.Namespace) -> None:
+    tab_id = client.resolve_tab(args.tab)
+    params = {}
+    if args.params_json:
+        try:
+            params = json.loads(args.params_json)
+        except json.JSONDecodeError as e:
+            _die(f"Invalid JSON params: {e}")
+    result = client.send_raw(tab_id, args.method, params)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_status(client: ChromeClient, args: argparse.Namespace) -> None:
+    try:
+        info = client.browser_version()
+    except CDPError:
+        print(f"Chrome not running on port {client.port}")
+        sys.exit(1)
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return
+    print(f"Chrome → {info.get('product', '?')}")
+    print(f"Protocol → {info.get('Protocol-Version', '?')}")
+    print(f"User-Agent → {info.get('User-Agent', '?')}")
+
+
+def cmd_kill(args: argparse.Namespace) -> None:
+    msg = ChromeClient.kill_chrome(args.port)
+    print(msg)
+
+
+def cmd_alias_set(client: ChromeClient, args: argparse.Namespace) -> None:
+    client.set_alias(args.name, args.alias_tab_id)
+    print(f"Alias {args.name!r} → {args.alias_tab_id}")
+
+
+def cmd_alias_list(client: ChromeClient, args: argparse.Namespace) -> None:
+    aliases = client.load_aliases()
+    if not aliases:
+        print("No aliases set.")
+        return
+    if args.json:
+        print(json.dumps(aliases, indent=2))
+        return
+    for name, tid in aliases.items():
+        print(f"  {name} → {tid}")
+
+
+def cmd_alias_delete(client: ChromeClient, args: argparse.Namespace) -> None:
+    client.delete_alias(args.name)
+    print(f"Deleted alias {args.name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -324,9 +460,69 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("frames", help="List iframes on the current page")
 
     # ddm
-    p = sub.add_parser("ddm", help="DOM Density Map (requires ddm binary)")
+    p = sub.add_parser("ddm", help="DOM Density Map")
     p.add_argument("ddm_flags", nargs=argparse.REMAINDER,
                    help="Flags passed directly to ddm binary")
+
+    # intel
+    p = sub.add_parser("intel", help="Page intelligence / extraction strategy")
+    p.add_argument("intel_flags", nargs=argparse.REMAINDER,
+                   help="Flags passed directly to intel binary")
+
+    # create_tab
+    p = sub.add_parser("create_tab", help="Open a new tab")
+    p.add_argument("url", nargs="?", default="about:blank",
+                   help="URL to open (default: about:blank)")
+
+    # close_tab
+    p = sub.add_parser("close_tab", help="Close a tab")
+    p.add_argument("close_tab_id", metavar="TAB_ID",
+                   help="Tab ID to close")
+
+    # set_file
+    p = sub.add_parser("set_file", help="Set files on a file input element")
+    p.add_argument("--selector", required=True, metavar="CSS",
+                   help="CSS selector for the file input")
+    p.add_argument("--files", nargs="+", required=True, metavar="PATH",
+                   help="File path(s) to set")
+
+    # press_enter
+    sub.add_parser("press_enter", help="Press Enter key")
+
+    # submit_form
+    p = sub.add_parser("submit_form", help="Submit a form")
+    p.add_argument("--selector", metavar="CSS",
+                   help="CSS selector for form or element inside form")
+
+    # js_frame
+    p = sub.add_parser("js_frame", help="Evaluate JS in a specific iframe")
+    p.add_argument("frame_id", help="Frame ID or index")
+    p.add_argument("expression", help="JS expression to evaluate")
+
+    # cdp (raw)
+    p = sub.add_parser("cdp", help="Send raw CDP command")
+    p.add_argument("method", help="CDP method (e.g. Page.reload)")
+    p.add_argument("params_json", nargs="?",
+                   help="Optional JSON params")
+
+    # status
+    sub.add_parser("status", help="Check if Chrome is alive")
+
+    # kill
+    sub.add_parser("kill", help="Kill Chrome process on this port")
+
+    # alias
+    alias_p = sub.add_parser("alias", help="Tab alias management")
+    alias_sub = alias_p.add_subparsers(dest="alias_command", metavar="action")
+
+    ap = alias_sub.add_parser("set", help="Set a tab alias")
+    ap.add_argument("name", help="Alias name")
+    ap.add_argument("alias_tab_id", metavar="TAB_ID", help="Tab ID")
+
+    alias_sub.add_parser("list", help="List tab aliases")
+
+    ap = alias_sub.add_parser("delete", help="Delete an alias")
+    ap.add_argument("name", help="Alias name")
 
     return parser
 
@@ -337,22 +533,53 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = _build_parser()
-    args   = parser.parse_args()
+
+    # DDM and Intel pass all flags through to their engines, so we need
+    # parse_known_args to avoid argparse eating --text, --probe, etc.
+    raw = sys.argv[1:]
+    if raw and raw[0] in ("ddm", "intel"):
+        # Find the subcommand, parse only global flags before it
+        cmd = raw[0]
+        # Extract global flags: --port, --tab, --json
+        port = int(os.environ.get("UNCHAINED_PORT", 9222))
+        tab = "auto"
+        i = 1
+        passthrough = []
+        while i < len(raw):
+            if raw[i] == "--port" and i + 1 < len(raw):
+                port = int(raw[i + 1])
+                i += 2
+            elif raw[i] == "--tab" and i + 1 < len(raw):
+                tab = raw[i + 1]
+                i += 2
+            elif raw[i] == "--json":
+                i += 1  # ignored for ddm/intel
+            else:
+                passthrough.append(raw[i])
+                i += 1
+        args = argparse.Namespace(command=cmd, port=port, tab=tab,
+                                  ddm_flags=passthrough if cmd == "ddm" else [],
+                                  intel_flags=passthrough if cmd == "intel" else [])
+        if cmd == "ddm":
+            cmd_ddm(args)
+        else:
+            cmd_intel(args)
+        return
+
+    args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         sys.exit(0)
-
-    # Commands that do not need an active CDP websocket session.
-    if args.command == "ddm":
-        cmd_ddm(args)
-        return
     if args.command == "launch":
         try:
             cmd_launch(args)
             return
         except _launch.LaunchError as e:
             _die(str(e))
+    if args.command == "kill":
+        cmd_kill(args)
+        return
 
     client = ChromeClient(port=args.port)
 
@@ -385,6 +612,32 @@ def main() -> None:
                     parser.parse_args(["cookies", "--help"])
             case "frames":
                 cmd_frames(client, args)
+            case "create_tab":
+                cmd_create_tab(client, args)
+            case "close_tab":
+                cmd_close_tab(client, args)
+            case "set_file":
+                cmd_set_file(client, args)
+            case "press_enter":
+                cmd_press_enter(client, args)
+            case "submit_form":
+                cmd_submit_form(client, args)
+            case "js_frame":
+                cmd_js_frame(client, args)
+            case "cdp":
+                cmd_cdp(client, args)
+            case "status":
+                cmd_status(client, args)
+            case "alias":
+                ac = getattr(args, "alias_command", None)
+                if ac == "set":
+                    cmd_alias_set(client, args)
+                elif ac == "list":
+                    cmd_alias_list(client, args)
+                elif ac == "delete":
+                    cmd_alias_delete(client, args)
+                else:
+                    parser.parse_args(["alias", "--help"])
             case _:
                 parser.print_help()
                 sys.exit(1)

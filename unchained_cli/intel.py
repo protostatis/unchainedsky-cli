@@ -1,10 +1,10 @@
-"""DDM dispatcher — uses compiled binary if available, falls back to Python engine.
+"""Intel dispatcher — uses compiled binary if available, falls back to Python engine.
 
 Search order:
-  1. $UNCHAINED_DDM_BIN  (env override)
-  2. ~/.unchained/bin/ddm
-  3. ddm in PATH
-  4. Built-in Python engine (ddm_engine.py)
+  1. $UNCHAINED_INTEL_BIN  (env override)
+  2. ~/.unchained/bin/intel
+  3. intel in PATH
+  4. Built-in Python engine (intel_engine.py)
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 
 
-_ENV_KEY = "UNCHAINED_DDM_BIN"
-_DEFAULT_PATH = Path.home() / ".unchained" / "bin" / "ddm"
+_ENV_KEY = "UNCHAINED_INTEL_BIN"
+_DEFAULT_PATH = Path.home() / ".unchained" / "bin" / "intel"
 
 
 def _find_binary() -> str | None:
@@ -25,11 +25,11 @@ def _find_binary() -> str | None:
         return env if os.path.isfile(env) and os.access(env, os.X_OK) else None
     if _DEFAULT_PATH.is_file() and os.access(_DEFAULT_PATH, os.X_OK):
         return str(_DEFAULT_PATH)
-    return shutil.which("ddm")
+    return shutil.which("intel")
 
 
-def run_ddm(port: int, tab_id: str, flags: list[str]) -> int:
-    """Run DDM via binary or fall back to Python engine."""
+def run_intel(port: int, tab_id: str, flags: list[str]) -> int:
+    """Run Intel via binary or fall back to Python engine."""
     binary = _find_binary()
     if binary:
         cmd = [binary, "--port", str(port), "--tab", tab_id] + flags
@@ -37,8 +37,7 @@ def run_ddm(port: int, tab_id: str, flags: list[str]) -> int:
         return proc.returncode
 
     # Fall back to built-in Python engine
-    from .ddm_engine import main as _engine_main, _CDP_PORT
-    import unchained_cli.ddm_engine as _mod
+    import unchained_cli.intel_engine as _mod
     _mod._CDP_PORT = port
     args = ["--port", str(port), "--tab", tab_id] + flags
     try:
@@ -48,5 +47,5 @@ def run_ddm(port: int, tab_id: str, flags: list[str]) -> int:
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else 1
     except Exception as e:
-        print(f"DDM error: {e}", file=sys.stderr)
+        print(f"Intel error: {e}", file=sys.stderr)
         return 1

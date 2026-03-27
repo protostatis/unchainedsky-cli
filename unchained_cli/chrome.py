@@ -8,9 +8,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import signal
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 _CONNECT_TIMEOUT = 5.0   # seconds to open HTTP connection to Chrome
@@ -23,12 +26,16 @@ class CDPError(RuntimeError):
     pass
 
 
+_ALIASES_DIR = Path.home() / ".unchained"
+
+
 class ChromeClient:
     """Minimal CDP client that talks directly to local Chrome."""
 
     def __init__(self, port: int = 9222):
         self.port = port
         self._base = f"http://localhost:{port}"
+        self._aliases: dict[str, str] | None = None
 
     # ------------------------------------------------------------------
     # Tab management
@@ -48,7 +55,7 @@ class ChromeClient:
             ) from exc
 
     def resolve_tab(self, tab_id: str = "auto") -> str:
-        """Return a concrete tab ID, resolving 'auto' to the first page tab."""
+        """Return a concrete tab ID, resolving 'auto' or aliases."""
         tabs = self.list_tabs()
         if not tabs:
             raise CDPError("No page tabs open in Chrome.")
@@ -57,7 +64,51 @@ class ChromeClient:
         for t in tabs:
             if t["id"] == tab_id:
                 return t["id"]
+        # Try alias resolution
+        aliases = self.load_aliases()
+        if tab_id in aliases:
+            resolved = aliases[tab_id]
+            for t in tabs:
+                if t["id"] == resolved:
+                    return resolved
+            raise CDPError(f"Alias {tab_id!r} points to {resolved!r} which no longer exists.")
         raise CDPError(f"Tab not found: {tab_id!r}")
+
+    # ------------------------------------------------------------------
+    # Tab aliases
+    # ------------------------------------------------------------------
+
+    def _aliases_path(self) -> Path:
+        return _ALIASES_DIR / f"aliases_{self.port}.json"
+
+    def load_aliases(self) -> dict[str, str]:
+        if self._aliases is not None:
+            return self._aliases
+        path = self._aliases_path()
+        if path.is_file():
+            try:
+                self._aliases = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._aliases = {}
+        else:
+            self._aliases = {}
+        return self._aliases
+
+    def save_aliases(self) -> None:
+        path = self._aliases_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.load_aliases(), indent=2))
+
+    def set_alias(self, name: str, tab_id: str) -> None:
+        self.load_aliases()[name] = tab_id
+        self.save_aliases()
+
+    def delete_alias(self, name: str) -> None:
+        aliases = self.load_aliases()
+        if name not in aliases:
+            raise CDPError(f"Alias not found: {name!r}")
+        del aliases[name]
+        self.save_aliases()
 
     def _ws_url_for(self, tab_id: str) -> str:
         try:
@@ -395,3 +446,111 @@ class ChromeClient:
                 _walk(child, idx)
         _walk(result.get("frameTree", {}), [0])
         return frames
+
+    # ------------------------------------------------------------------
+    # Tab lifecycle
+    # ------------------------------------------------------------------
+
+    def create_tab(self, url: str = "about:blank") -> dict:
+        """Open a new tab and return its info dict."""
+        try:
+            encoded = urllib.request.quote(url, safe="/:?=&#")
+            req = urllib.request.Request(
+                f"{self._base}/json/new?{encoded}", method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as r:
+                return json.loads(r.read())
+        except urllib.error.URLError as exc:
+            raise CDPError(f"Failed to create tab: {exc}") from exc
+
+    def close_tab(self, tab_id: str) -> None:
+        """Close a tab by ID."""
+        try:
+            req = urllib.request.Request(
+                f"{self._base}/json/close/{tab_id}", method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as r:
+                r.read()
+        except urllib.error.URLError as exc:
+            raise CDPError(f"Failed to close tab {tab_id!r}: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Browser info / lifecycle
+    # ------------------------------------------------------------------
+
+    def browser_version(self) -> dict:
+        """Return Chrome version info, or raise CDPError if not reachable."""
+        try:
+            with urllib.request.urlopen(
+                f"{self._base}/json/version", timeout=_CONNECT_TIMEOUT
+            ) as r:
+                return json.loads(r.read())
+        except urllib.error.URLError as exc:
+            raise CDPError(
+                f"Chrome not reachable at localhost:{self.port}"
+            ) from exc
+
+    @staticmethod
+    def kill_chrome(port: int) -> str:
+        """Kill Chrome process listening on *port*.  Returns status message."""
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["lsof", "-ti", f"tcp:{port}"], text=True
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return f"No process found on port {port}"
+        pids = {int(p) for p in out.split() if p.strip()}
+        if not pids:
+            return f"No process found on port {port}"
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        return f"Sent SIGTERM to PID(s): {', '.join(str(p) for p in sorted(pids))}"
+
+    # ------------------------------------------------------------------
+    # Extra CDP helpers
+    # ------------------------------------------------------------------
+
+    def set_file(self, tab_id: str, selector: str, files: list[str]) -> None:
+        """Set files on a file input element."""
+        doc = self.send(tab_id, "DOM.getDocument", {})
+        root_id = doc["root"]["nodeId"]
+        node = self.send(tab_id, "DOM.querySelector", {
+            "nodeId": root_id,
+            "selector": selector,
+        })
+        node_id = node.get("nodeId", 0)
+        if not node_id:
+            raise CDPError(f"Element not found: {selector!r}")
+        self.send(tab_id, "DOM.setFileInputFiles", {
+            "nodeId": node_id,
+            "files": files,
+        })
+
+    def submit_form(self, tab_id: str, selector: str | None = None) -> Any:
+        """Submit a form by selector or the first form on page."""
+        sel = json.dumps(selector) if selector else "'form'"
+        expr = f"""
+        (function() {{
+            var form = document.querySelector({sel});
+            if (!form) return {{error: "No form found"}};
+            if (form.tagName !== 'FORM') form = form.closest('form');
+            if (!form) return {{error: "Element is not inside a form"}};
+            var btn = form.querySelector('[type=submit],button:not([type])');
+            if (btn) {{ btn.click(); return {{method: "click", tag: btn.tagName}}; }}
+            form.submit();
+            return {{method: "submit"}};
+        }})()
+        """
+        result = self.js_eval(tab_id, expr)
+        if isinstance(result, dict) and "error" in result:
+            raise CDPError(result["error"])
+        return result
+
+    def send_raw(self, tab_id: str, method: str, params: dict | None = None,
+                 timeout: float = _CMD_TIMEOUT) -> dict:
+        """Send a raw CDP command and return the full result."""
+        return self.send(tab_id, method, params, timeout=timeout)

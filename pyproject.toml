@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=70"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "unchainedsky-cli"
@@ -13,6 +13,8 @@ dependencies = [
 
 [project.scripts]
 unchained = "unchained_cli.cli:main"
+unchained-ddm = "unchained_cli.ddm_engine:main"
+unchained-intel = "unchained_cli.intel_engine:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
