@@ -1,46 +1,4 @@
-"""unchained CLI — browser automation over local Chrome CDP.
-
-Usage:
-    unchained [--port PORT] [--tab TAB] <command> [args]
-
-Global options:
-    --port PORT     Chrome remote debugging port (default: 9222, env: UNCHAINED_PORT)
-    --tab  TAB_ID   Target tab ID, alias, or 'auto' (default: auto)
-    --json          Output raw JSON where applicable
-
-Commands:
-    launch [url]                 Launch Chrome with hardened CDP startup
-    status                       Check if Chrome is alive
-    kill                         Kill Chrome on this port
-    tabs                         List open tabs
-    create_tab [url]             Open a new tab
-    close_tab <tab_id>           Close a tab
-    navigate <url>               Navigate to URL
-    click  --x X --y Y           Click at coordinates
-    click  --selector CSS        Click element by CSS selector
-    type   <text>                Type text into focused element
-    press_enter                  Press Enter key
-    key    <key>                 Press a key (Enter, Tab, Escape, ArrowDown, …)
-           [--modifiers N]       Modifier bitmask: 1=Alt 2=Ctrl 4=Meta 8=Shift
-    scroll [--direction DIR]     Scroll page (up/down/left/right, default: down)
-           [--amount N]          Pixels to scroll (default: 500)
-    submit_form [--selector CSS] Submit a form
-    set_file --selector CSS --files PATH [PATH ...]
-    screenshot [--output FILE]   Save screenshot (default: screenshot.png)
-    js     <expression>          Evaluate JavaScript and print result
-    js_frame <frame> <expr>      Evaluate JS in a specific iframe
-    cdp    <method> [params]     Send raw CDP command
-    wait   [--strategy STRAT]    Wait for page load (dom/network/both, default: both)
-           [--timeout N]         Timeout in seconds (default: 30)
-    cookies get [--urls URL ...] Get cookies for URLs
-    cookies set <json>           Inject cookies from JSON array
-    frames                       List iframes on the page
-    alias  set <name> <tab_id>   Set a tab alias
-    alias  list                  List tab aliases
-    alias  delete <name>         Delete a tab alias
-    ddm    [flags ...]           DOM Density Map
-    intel  [flags ...]           Page intelligence / extraction strategy
-"""
+"""unchained — browser automation CLI over local Chrome CDP."""
 from __future__ import annotations
 
 import argparse
@@ -364,11 +322,22 @@ def cmd_alias_delete(client: ChromeClient, args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
+    epilog = """\
+examples:
+  unchained launch                       Start Chrome
+  unchained navigate https://example.com Navigate (returns page layout + intel)
+  unchained ddm --text --find "price"    Search page text for keyword
+  unchained ddm --at 694,584             Element details at coordinates
+  unchained intel --probe                Fingerprint page, rank strategies
+  unchained click --x 500 --y 300        Click at coordinates
+  unchained js "document.title"          Run JavaScript
+  unchained agent "find flights to NYC"  Start Claude browsing agent
+"""
     parser = argparse.ArgumentParser(
         prog="unchained",
         description="Browser automation over local Chrome CDP.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+        epilog=epilog,
     )
     parser.add_argument(
         "--port", type=int,
