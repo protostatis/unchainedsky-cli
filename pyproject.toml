@@ -11,6 +11,9 @@ dependencies = [
     "websockets>=12.0",
 ]
 
+[project.optional-dependencies]
+agent = ["anthropic>=0.49"]
+
 [project.scripts]
 unchained = "unchained_cli.cli:main"
 unchained-ddm = "unchained_cli.ddm_engine:main"

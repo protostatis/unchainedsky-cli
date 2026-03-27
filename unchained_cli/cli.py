@@ -511,6 +511,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # kill
     sub.add_parser("kill", help="Kill Chrome process on this port")
 
+    # agent
+    p = sub.add_parser("agent", help="Interactive Claude browser agent")
+    p.add_argument("task", nargs="?", help="Initial task (optional)")
+    p.add_argument("--model", default="sonnet",
+                   help="Model: sonnet, opus, haiku, or full model ID (default: sonnet)")
+
     # alias
     alias_p = sub.add_parser("alias", help="Tab alias management")
     alias_sub = alias_p.add_subparsers(dest="alias_command", metavar="action")
@@ -579,6 +585,10 @@ def main() -> None:
             _die(str(e))
     if args.command == "kill":
         cmd_kill(args)
+        return
+    if args.command == "agent":
+        from .agent import run_agent
+        run_agent(port=args.port, model=args.model, initial_task=args.task)
         return
 
     client = ChromeClient(port=args.port)
