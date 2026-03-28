@@ -513,32 +513,49 @@ def main() -> None:
     parser = _build_parser()
 
     # DDM and Intel pass all flags through to their engines, so we need
-    # parse_known_args to avoid argparse eating --text, --probe, etc.
+    # to intercept before argparse eats --text, --probe, etc.
     raw = sys.argv[1:]
-    if raw and raw[0] in ("ddm", "intel"):
-        # Find the subcommand, parse only global flags before it
-        cmd = raw[0]
-        # Extract global flags: --port, --tab, --json
+    # Find the subcommand position (skip global flags like --port, --tab)
+    cmd_name = None
+    cmd_idx = -1
+    _skip_next = False
+    for idx, token in enumerate(raw):
+        if _skip_next:
+            _skip_next = False
+            continue
+        if token in ("ddm", "intel"):
+            cmd_name = token
+            cmd_idx = idx
+            break
+        if token in ("--port", "--tab"):
+            _skip_next = True  # skip the value arg
+            continue
+        if token.startswith("-"):
+            continue  # other flags like --json
+        # Non-flag token that isn't ddm/intel — it's a different subcommand
+        break
+    if cmd_name:
+        # Extract global flags before the subcommand
         port = int(os.environ.get("UNCHAINED_PORT", 9222))
         tab = "auto"
-        i = 1
-        passthrough = []
-        while i < len(raw):
-            if raw[i] == "--port" and i + 1 < len(raw):
+        i = 0
+        while i < cmd_idx:
+            if raw[i] == "--port" and i + 1 < cmd_idx:
                 port = int(raw[i + 1])
                 i += 2
-            elif raw[i] == "--tab" and i + 1 < len(raw):
+            elif raw[i] == "--tab" and i + 1 < cmd_idx:
                 tab = raw[i + 1]
                 i += 2
             elif raw[i] == "--json":
-                i += 1  # ignored for ddm/intel
-            else:
-                passthrough.append(raw[i])
                 i += 1
-        args = argparse.Namespace(command=cmd, port=port, tab=tab,
-                                  ddm_flags=passthrough if cmd == "ddm" else [],
-                                  intel_flags=passthrough if cmd == "intel" else [])
-        if cmd == "ddm":
+            else:
+                i += 1
+        # Everything after the subcommand name is passthrough
+        passthrough = raw[cmd_idx + 1:]
+        args = argparse.Namespace(command=cmd_name, port=port, tab=tab,
+                                  ddm_flags=passthrough if cmd_name == "ddm" else [],
+                                  intel_flags=passthrough if cmd_name == "intel" else [])
+        if cmd_name == "ddm":
             cmd_ddm(args)
         else:
             cmd_intel(args)
