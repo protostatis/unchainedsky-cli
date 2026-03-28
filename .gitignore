@@ -2,5 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+dist_nuitka/
 build/
 .venv/
+.env

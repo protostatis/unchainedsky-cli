@@ -1,18 +1,25 @@
 [build-system]
 requires = ["setuptools>=70"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "unchainedsky-cli"
-version = "0.1.0"
-description = "Browser automation CLI over local Chrome CDP"
+version = "0.1.1"
+description = "Browser automation CLI over local Chrome CDP — DDM-first methodology for LLM agents"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
     "websockets>=12.0",
 ]
 
+[project.optional-dependencies]
+agent = ["anthropic>=0.49"]
+
 [project.scripts]
 unchained = "unchained_cli.cli:main"
+unchained-ddm = "unchained_cli.ddm_engine:main"
+unchained-intel = "unchained_cli.intel_engine:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

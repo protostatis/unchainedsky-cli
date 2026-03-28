@@ -8,16 +8,25 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import signal
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 _CONNECT_TIMEOUT = 5.0   # seconds to open HTTP connection to Chrome
 _CMD_TIMEOUT     = 30.0  # seconds to wait for a CDP command response
+_DOM_POLL_INTERVAL = 0.2
+_NETWORK_IDLE_WINDOW = 0.5
 
 
 class CDPError(RuntimeError):
     pass
+
+
+_ALIASES_DIR = Path.home() / ".unchained"
 
 
 class ChromeClient:
@@ -26,6 +35,7 @@ class ChromeClient:
     def __init__(self, port: int = 9222):
         self.port = port
         self._base = f"http://localhost:{port}"
+        self._aliases: dict[str, str] | None = None
 
     # ------------------------------------------------------------------
     # Tab management
@@ -45,7 +55,7 @@ class ChromeClient:
             ) from exc
 
     def resolve_tab(self, tab_id: str = "auto") -> str:
-        """Return a concrete tab ID, resolving 'auto' to the first page tab."""
+        """Return a concrete tab ID, resolving 'auto' or aliases."""
         tabs = self.list_tabs()
         if not tabs:
             raise CDPError("No page tabs open in Chrome.")
@@ -54,7 +64,51 @@ class ChromeClient:
         for t in tabs:
             if t["id"] == tab_id:
                 return t["id"]
+        # Try alias resolution
+        aliases = self.load_aliases()
+        if tab_id in aliases:
+            resolved = aliases[tab_id]
+            for t in tabs:
+                if t["id"] == resolved:
+                    return resolved
+            raise CDPError(f"Alias {tab_id!r} points to {resolved!r} which no longer exists.")
         raise CDPError(f"Tab not found: {tab_id!r}")
+
+    # ------------------------------------------------------------------
+    # Tab aliases
+    # ------------------------------------------------------------------
+
+    def _aliases_path(self) -> Path:
+        return _ALIASES_DIR / f"aliases_{self.port}.json"
+
+    def load_aliases(self) -> dict[str, str]:
+        if self._aliases is not None:
+            return self._aliases
+        path = self._aliases_path()
+        if path.is_file():
+            try:
+                self._aliases = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._aliases = {}
+        else:
+            self._aliases = {}
+        return self._aliases
+
+    def save_aliases(self) -> None:
+        path = self._aliases_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.load_aliases(), indent=2))
+
+    def set_alias(self, name: str, tab_id: str) -> None:
+        self.load_aliases()[name] = tab_id
+        self.save_aliases()
+
+    def delete_alias(self, name: str) -> None:
+        aliases = self.load_aliases()
+        if name not in aliases:
+            raise CDPError(f"Alias not found: {name!r}")
+        del aliases[name]
+        self.save_aliases()
 
     def _ws_url_for(self, tab_id: str) -> str:
         try:
@@ -90,9 +144,34 @@ class ChromeClient:
     ) -> dict:
         """Send a CDP command and return the result dict."""
         ws_url = self._ws_url_for(tab_id)
-        return asyncio.run(
-            self._async_send(ws_url, method, params or {}, wait_for_event, timeout)
-        )
+        try:
+            return asyncio.run(
+                self._async_send(ws_url, method, params or {}, wait_for_event, timeout)
+            )
+        except asyncio.TimeoutError as exc:
+            detail = f"Timed out after {timeout:.1f}s while waiting for {method}"
+            if wait_for_event:
+                detail += f" / {wait_for_event}"
+            raise CDPError(detail) from exc
+        except OSError as exc:
+            raise CDPError(f"Could not connect to Chrome tab websocket: {exc}") from exc
+
+    @staticmethod
+    def _require_websockets():
+        try:
+            import websockets
+        except ImportError as exc:
+            raise CDPError(
+                "Missing dependency 'websockets'. Run: pip install websockets"
+            ) from exc
+        return websockets
+
+    @staticmethod
+    def _runtime_value(result: dict) -> Any:
+        obj = result.get("result", {})
+        if obj.get("subtype") == "error":
+            raise CDPError(obj.get("description", "JS error"))
+        return obj.get("value")
 
     async def _async_send(
         self,
@@ -102,12 +181,7 @@ class ChromeClient:
         wait_for_event: str | None,
         timeout: float,
     ) -> dict:
-        try:
-            import websockets
-        except ImportError:
-            raise CDPError(
-                "Missing dependency 'websockets'. Run: pip install websockets"
-            )
+        websockets = self._require_websockets()
 
         async def _run() -> dict:
             async with websockets.connect(ws_url, ping_timeout=None) as ws:
@@ -204,10 +278,7 @@ class ChromeClient:
             "returnByValue": True,
             "awaitPromise": True,
         })
-        obj = result.get("result", {})
-        if obj.get("subtype") == "error":
-            raise CDPError(obj.get("description", "JS error"))
-        val = obj.get("value")
+        val = self._runtime_value(result)
         # If JSON string returned from expression, parse it
         if isinstance(val, str):
             try:
@@ -216,17 +287,36 @@ class ChromeClient:
                 pass
         return val
 
+    def _resolve_frame_id(self, tab_id: str, frame_id: str) -> str:
+        if frame_id.isdigit():
+            index = int(frame_id)
+            for frame in self.list_frames(tab_id):
+                if frame["index"] == index:
+                    return frame["frameId"]
+            raise CDPError(f"Frame index not found: {frame_id}")
+
+        for frame in self.list_frames(tab_id):
+            if frame["frameId"] == frame_id:
+                return frame_id
+        raise CDPError(f"Frame not found: {frame_id}")
+
     def js_eval_frame(self, tab_id: str, frame_id: str, expression: str) -> Any:
+        resolved_frame_id = self._resolve_frame_id(tab_id, frame_id)
+        world = self.send(tab_id, "Page.createIsolatedWorld", {
+            "frameId": resolved_frame_id,
+            "worldName": "unchained_cli",
+        })
+        context_id = world.get("executionContextId")
+        if context_id is None:
+            raise CDPError(f"Could not create execution context for frame: {frame_id}")
+
         result = self.send(tab_id, "Runtime.evaluate", {
             "expression": expression,
             "returnByValue": True,
             "awaitPromise": True,
-            "contextId": int(frame_id) if frame_id.isdigit() else None,
+            "contextId": context_id,
         })
-        obj = result.get("result", {})
-        if obj.get("subtype") == "error":
-            raise CDPError(obj.get("description", "JS error"))
-        return obj.get("value")
+        return self._runtime_value(result)
 
     def key_press(self, tab_id: str, key: str, modifiers: int = 0) -> None:
         for event_type in ("keyDown", "keyUp"):
@@ -237,26 +327,98 @@ class ChromeClient:
             })
 
     def wait_ready(self, tab_id: str, strategy: str = "both", timeout: float = 30.0) -> str:
-        if strategy in ("dom", "both"):
-            # Poll document.readyState
-            import time
+        ws_url = self._ws_url_for(tab_id)
+        try:
+            return asyncio.run(self._async_wait_ready(ws_url, strategy, timeout))
+        except asyncio.TimeoutError as exc:
+            raise CDPError(
+                f"Timed out after {timeout:.1f}s while waiting for page readiness "
+                f"(strategy={strategy})"
+            ) from exc
+
+    async def _async_wait_ready(
+        self,
+        ws_url: str,
+        strategy: str,
+        timeout: float,
+    ) -> str:
+        websockets = self._require_websockets()
+        wants_dom = strategy in ("dom", "both")
+        wants_network = strategy in ("network", "both")
+
+        async with websockets.connect(ws_url, ping_timeout=None) as ws:
+            await ws.send(json.dumps({"id": 0, "method": "Runtime.enable", "params": {}}))
+            if wants_network:
+                await ws.send(json.dumps({"id": 0, "method": "Network.enable", "params": {}}))
+
+            next_cmd_id = 1
+            pending_dom_check_id: int | None = None
+            next_dom_poll_at = 0.0
+            inflight_requests: set[str] = set()
+            last_network_activity = time.monotonic()
             deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                state = self.send(tab_id, "Runtime.evaluate", {
-                    "expression": "document.readyState",
-                    "returnByValue": True,
-                })
-                if state.get("result", {}).get("value") == "complete":
-                    break
-                time.sleep(0.2)
-        if strategy in ("network", "both"):
-            self.send(
-                tab_id, "Page.navigate",
-                {"url": "javascript:void(0)"},  # no-op nav just to flush events
-                wait_for_event="Page.loadEventFired",
-                timeout=timeout,
-            )
-        return "ready"
+            dom_ready = not wants_dom
+
+            async def send_dom_check() -> None:
+                nonlocal next_cmd_id, pending_dom_check_id, next_dom_poll_at
+                if not wants_dom or dom_ready or pending_dom_check_id is not None:
+                    return
+                pending_dom_check_id = next_cmd_id
+                next_cmd_id += 1
+                next_dom_poll_at = time.monotonic() + _DOM_POLL_INTERVAL
+                await ws.send(json.dumps({
+                    "id": pending_dom_check_id,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "document.readyState",
+                        "returnByValue": True,
+                    },
+                }))
+
+            await send_dom_check()
+
+            while True:
+                now = time.monotonic()
+                network_ready = (
+                    not wants_network
+                    or (
+                        not inflight_requests
+                        and now - last_network_activity >= _NETWORK_IDLE_WINDOW
+                    )
+                )
+                if dom_ready and network_ready:
+                    return "ready"
+                if now >= deadline:
+                    raise asyncio.TimeoutError
+                if wants_dom and not dom_ready and pending_dom_check_id is None and now >= next_dom_poll_at:
+                    await send_dom_check()
+
+                recv_timeout = min(_DOM_POLL_INTERVAL, max(0.0, deadline - now))
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
+                except asyncio.TimeoutError:
+                    continue
+
+                msg = json.loads(raw)
+
+                if msg.get("id") == pending_dom_check_id:
+                    pending_dom_check_id = None
+                    dom_ready = self._runtime_value(msg.get("result", {})) == "complete"
+                    continue
+
+                if not wants_network:
+                    continue
+
+                method = msg.get("method")
+                params = msg.get("params", {})
+                request_id = params.get("requestId")
+
+                if method == "Network.requestWillBeSent" and request_id:
+                    inflight_requests.add(request_id)
+                    last_network_activity = time.monotonic()
+                elif method in ("Network.loadingFinished", "Network.loadingFailed") and request_id:
+                    inflight_requests.discard(request_id)
+                    last_network_activity = time.monotonic()
 
     def get_cookies(self, tab_id: str, urls: list[str] | None = None) -> list[dict]:
         if urls:
@@ -284,3 +446,141 @@ class ChromeClient:
                 _walk(child, idx)
         _walk(result.get("frameTree", {}), [0])
         return frames
+
+    # ------------------------------------------------------------------
+    # Tab lifecycle
+    # ------------------------------------------------------------------
+
+    def create_tab(self, url: str = "about:blank") -> dict:
+        """Open a new tab and return its info dict."""
+        try:
+            encoded = urllib.request.quote(url, safe="/:?=&#")
+            req = urllib.request.Request(
+                f"{self._base}/json/new?{encoded}", method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as r:
+                return json.loads(r.read())
+        except urllib.error.URLError as exc:
+            raise CDPError(f"Failed to create tab: {exc}") from exc
+
+    def close_tab(self, tab_id: str) -> None:
+        """Close a tab by ID."""
+        try:
+            req = urllib.request.Request(
+                f"{self._base}/json/close/{tab_id}", method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=_CONNECT_TIMEOUT) as r:
+                r.read()
+        except urllib.error.URLError as exc:
+            raise CDPError(f"Failed to close tab {tab_id!r}: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Browser info / lifecycle
+    # ------------------------------------------------------------------
+
+    def browser_version(self) -> dict:
+        """Return Chrome version info, or raise CDPError if not reachable."""
+        try:
+            with urllib.request.urlopen(
+                f"{self._base}/json/version", timeout=_CONNECT_TIMEOUT
+            ) as r:
+                return json.loads(r.read())
+        except urllib.error.URLError as exc:
+            raise CDPError(
+                f"Chrome not reachable at localhost:{self.port}"
+            ) from exc
+
+    @staticmethod
+    def kill_chrome(port: int) -> str:
+        """Kill Chrome process listening on *port*.  Returns status message."""
+        import platform
+        import subprocess
+        system = platform.system()
+
+        if system == "Windows":
+            # Windows: use netstat + taskkill
+            try:
+                out = subprocess.check_output(
+                    ["netstat", "-ano"], text=True, stderr=subprocess.DEVNULL
+                )
+                pids = set()
+                for line in out.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        parts = line.split()
+                        if parts:
+                            try:
+                                pids.add(int(parts[-1]))
+                            except ValueError:
+                                pass
+                if not pids:
+                    return f"No process found on port {port}"
+                for pid in pids:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True,
+                    )
+                return f"Killed PID(s): {', '.join(str(p) for p in sorted(pids))}"
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return f"No process found on port {port}"
+        else:
+            # macOS / Linux: use lsof + SIGTERM
+            try:
+                out = subprocess.check_output(
+                    ["lsof", "-ti", f"tcp:{port}"], text=True
+                ).strip()
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return f"No process found on port {port}"
+            pids = {int(p) for p in out.split() if p.strip()}
+            if not pids:
+                return f"No process found on port {port}"
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            return f"Sent SIGTERM to PID(s): {', '.join(str(p) for p in sorted(pids))}"
+
+    # ------------------------------------------------------------------
+    # Extra CDP helpers
+    # ------------------------------------------------------------------
+
+    def set_file(self, tab_id: str, selector: str, files: list[str]) -> None:
+        """Set files on a file input element."""
+        doc = self.send(tab_id, "DOM.getDocument", {})
+        root_id = doc["root"]["nodeId"]
+        node = self.send(tab_id, "DOM.querySelector", {
+            "nodeId": root_id,
+            "selector": selector,
+        })
+        node_id = node.get("nodeId", 0)
+        if not node_id:
+            raise CDPError(f"Element not found: {selector!r}")
+        self.send(tab_id, "DOM.setFileInputFiles", {
+            "nodeId": node_id,
+            "files": files,
+        })
+
+    def submit_form(self, tab_id: str, selector: str | None = None) -> Any:
+        """Submit a form by selector or the first form on page."""
+        sel = json.dumps(selector) if selector else "'form'"
+        expr = f"""
+        (function() {{
+            var form = document.querySelector({sel});
+            if (!form) return {{error: "No form found"}};
+            if (form.tagName !== 'FORM') form = form.closest('form');
+            if (!form) return {{error: "Element is not inside a form"}};
+            var btn = form.querySelector('[type=submit],button:not([type])');
+            if (btn) {{ btn.click(); return {{method: "click", tag: btn.tagName}}; }}
+            form.submit();
+            return {{method: "submit"}};
+        }})()
+        """
+        result = self.js_eval(tab_id, expr)
+        if isinstance(result, dict) and "error" in result:
+            raise CDPError(result["error"])
+        return result
+
+    def send_raw(self, tab_id: str, method: str, params: dict | None = None,
+                 timeout: float = _CMD_TIMEOUT) -> dict:
+        """Send a raw CDP command and return the full result."""
+        return self.send(tab_id, method, params, timeout=timeout)
