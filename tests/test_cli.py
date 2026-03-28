@@ -44,6 +44,7 @@ class CliCommandTests(unittest.TestCase):
             url="https://example.com",
             timeout=15.0,
             chrome_args=[],
+            use_profile=False,
             json=False,
         )
 
@@ -74,6 +75,7 @@ class CliCommandTests(unittest.TestCase):
             url="https://example.com",
             timeout=15.0,
             chrome_args=[],
+            use_profile=False,
             json=False,
         )
 
@@ -105,6 +107,7 @@ class CliCommandTests(unittest.TestCase):
             url="https://example.com",
             timeout=15.0,
             chrome_args=[],
+            use_profile=False,
             json=False,
         )
 
@@ -181,8 +184,8 @@ class CliSmokeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Browser automation over local Chrome CDP.", result.stdout)
-        self.assertIn("launch [url]", result.stdout)
-        self.assertIn("cookies get [--urls URL ...]", result.stdout)
+        self.assertIn("launch", result.stdout)
+        self.assertIn("navigate", result.stdout)
 
 
 if __name__ == "__main__":

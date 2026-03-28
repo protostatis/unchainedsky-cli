@@ -88,6 +88,7 @@ def _build_launch_command(
     startup_url: str,
     headless: bool,
     extra_args: list[str] | None,
+    profile_directory: str | None = None,
 ) -> list[str]:
     chrome_args = [
         f"--user-data-dir={profile_dir}",
@@ -95,6 +96,8 @@ def _build_launch_command(
         "--no-first-run",
         "--no-default-browser-check",
     ]
+    if profile_directory:
+        chrome_args.append(f"--profile-directory={profile_directory}")
     if headless:
         chrome_args.extend([
             "--headless=new",
@@ -169,6 +172,24 @@ def _ensure_page_tab(host: str, port: int, startup_url: str) -> bool:
     return True
 
 
+def _default_chrome_user_data_dir() -> Path | None:
+    """Return the default Chrome user-data-dir for the current platform."""
+    system = platform.system()
+    if system == "Darwin":
+        p = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    elif system == "Linux":
+        p = Path.home() / ".config" / "google-chrome"
+    elif system == "Windows":
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            p = Path(local) / "Google" / "Chrome" / "User Data"
+        else:
+            return None
+    else:
+        return None
+    return p if p.is_dir() else None
+
+
 def launch_chrome(
     *,
     port: int = 9222,
@@ -177,8 +198,16 @@ def launch_chrome(
     startup_url: str = "about:blank",
     timeout: float = 15.0,
     extra_args: list[str] | None = None,
+    use_existing_profile: bool = False,
 ) -> dict[str, Any]:
-    """Ensure a Chrome instance with CDP is available on the requested port."""
+    """Ensure a Chrome instance with CDP is available on the requested port.
+
+    When *use_existing_profile* is True (``--use-profile`` CLI flag), Chrome
+    is launched with the real user-data-dir and ``--profile-directory=<profile>``
+    so the user's cookies, logins, and extensions are available.  The *profile*
+    argument should match a Chrome profile directory name such as ``Default``,
+    ``Profile 1``, ``Profile 8``, etc.
+    """
     _BLOCKED_EXTRA_ARG_PREFIXES = ("--user-data-dir", "--remote-debugging-port")
     if extra_args:
         for arg in extra_args:
@@ -191,9 +220,23 @@ def launch_chrome(
 
     host = DEFAULT_HOST
     startup_url = startup_url or "about:blank"
-    profile_name = _sanitize_profile(profile)
-    data_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
-    profile_dir = data_dir / f"chrome_{profile_name}"
+
+    if use_existing_profile:
+        chrome_udd = _default_chrome_user_data_dir()
+        if not chrome_udd:
+            raise LaunchError(
+                "Cannot find Chrome user data directory. "
+                "Set UNCHAINED_CHROME_UDD=/path/to/Chrome/User\\ Data"
+            )
+        chrome_udd = Path(os.environ.get("UNCHAINED_CHROME_UDD", chrome_udd))
+        profile_dir = chrome_udd
+        profile_name = profile  # e.g. "Profile 8", "Default"
+        data_dir = chrome_udd.parent
+    else:
+        profile_name = _sanitize_profile(profile)
+        data_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
+        profile_dir = data_dir / f"chrome_{profile_name}"
+
     data_dir.mkdir(parents=True, exist_ok=True)
 
     if _version_json(host, port):
@@ -223,7 +266,8 @@ def launch_chrome(
             "No Chrome/Chromium binary found. Set UNCHAINED_CHROME_BIN or install Chrome."
         )
 
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    if not use_existing_profile:
+        profile_dir.mkdir(parents=True, exist_ok=True)
     cmd = _build_launch_command(
         chrome_bin,
         profile_dir=profile_dir,
@@ -231,10 +275,16 @@ def launch_chrome(
         startup_url=startup_url,
         headless=headless,
         extra_args=extra_args,
+        profile_directory=profile_name if use_existing_profile else None,
     )
     uses_launcher_wrapper = bool(cmd) and cmd[0] == "open"
 
-    log_path = profile_dir / "chrome.log"
+    if use_existing_profile:
+        log_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "chrome.log"
+    else:
+        log_path = profile_dir / "chrome.log"
     log_fh = open(log_path, "wb")
     try:
         proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh)

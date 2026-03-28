@@ -60,6 +60,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
         startup_url=args.url,
         timeout=args.timeout,
         extra_args=args.chrome_args,
+        use_existing_profile=args.use_profile,
     )
     if args.json:
         print(json.dumps(result, indent=2))
@@ -361,7 +362,9 @@ examples:
     p.add_argument("url", nargs="?", default="about:blank",
                    help="Startup URL or page to open if Chrome is already running")
     p.add_argument("--profile", default="default", metavar="NAME",
-                   help="Profile name for the dedicated Chrome user-data-dir (default: default)")
+                   help="Profile name — sandboxed by default, or Chrome profile dir name with --use-profile (e.g. 'Default', 'Profile 8')")
+    p.add_argument("--use-profile", action="store_true",
+                   help="Use an existing Chrome profile (with cookies/logins) instead of a sandboxed one")
     p.add_argument("--headless", action="store_true",
                    help="Launch Chrome headless")
     p.add_argument("--timeout", type=float, default=15.0, metavar="SECS",
