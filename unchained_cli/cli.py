@@ -327,15 +327,33 @@ def cmd_alias_delete(client: ChromeClient, args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     epilog = """\
+workflow (DDM-first — use for every browsing task):
+  1. navigate returns page layout + intel probe inline. read it first.
+  2. ddm --at x,y for element details. ddm --text --find "kw" to search.
+  3. click coordinates from layout. click to focus before typing.
+  4. intel --probe on new domains. follow strategy: js_global→intel --stores,
+     host_attrs/data_testid→intel --extract, otherwise ddm --text or js.
+  5. screenshot only for CAPTCHAs/images (~2100 tokens vs ~500 for ddm).
+
 examples:
-  unchained launch                       Start Chrome
-  unchained navigate https://example.com Navigate (returns page layout + intel)
-  unchained ddm --text --find "price"    Search page text for keyword
-  unchained ddm --at 694,584             Element details at coordinates
-  unchained intel --probe                Fingerprint page, rank strategies
-  unchained click --x 500 --y 300        Click at coordinates
-  unchained js "document.title"          Run JavaScript
-  unchained agent "find flights to NYC"  Start Claude browsing agent
+  unchained launch                                     start Chrome (sandboxed)
+  unchained launch --stealth https://example.com       stealth mode (evade bots)
+  unchained --port 9333 launch --use-profile --profile "Profile 3" https://x.com
+  unchained navigate https://example.com               navigate (returns layout)
+  unchained ddm --text --find "price"                  search page text
+  unchained ddm --at 694,584                           element details at coords
+  unchained ddm --tabs                                 list open tabs
+  unchained intel --probe                              fingerprint page
+  unchained intel --stores                             list JS data stores
+  unchained click --x 500 --y 300                      click at coordinates
+  unchained type "hello" && unchained press_enter      type and submit
+  unchained js "document.title"                        run JavaScript
+  unchained agent "find flights to NYC"                Claude browsing agent
+
+ddm flags: --llm-2pass --sparse --text --find <kw> --at <x>,<y> --interactive
+           --forms --json --blocks --tabs --new [url] --close <id> --cols <n>
+intel flags: --probe --extract --strategy <name> --stores --shape <global>
+             --find-paths <global> <pattern>
 """
     parser = argparse.ArgumentParser(
         prog="unchained",
