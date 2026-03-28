@@ -172,6 +172,78 @@ def _ensure_page_tab(host: str, port: int, startup_url: str) -> bool:
     return True
 
 
+_PROFILE_CACHE_DIRS = {
+    "Cache", "Code Cache", "GPUCache", "ShaderCache",
+    "Service Worker", "GrShaderCache", "DawnCache",
+}
+
+_LIGHT_PROFILE_FILES = (
+    "Preferences",
+    "Secure Preferences",
+    "Cookies",
+    "Cookies-journal",
+    "Login Data",
+    "Login Data-journal",
+    "Web Data",
+    "Web Data-journal",
+    os.path.join("Network", "Cookies"),
+    os.path.join("Network", "Cookies-journal"),
+)
+
+_LIGHT_PROFILE_DIRS = (
+    "Local Storage",
+    "Session Storage",
+    "IndexedDB",
+)
+
+
+def _copy_chrome_profile(src_profile: Path, dest_user_data_dir: Path,
+                          profile_dir_name: str, mode: str = "full") -> None:
+    """Copy a Chrome profile to a sandboxed user-data-dir.
+
+    Also copies Local State from the parent (Chrome needs it for profile
+    selection).  Skips cache directories to save time and disk.
+    """
+    dest_profile = dest_user_data_dir / profile_dir_name
+
+    # Clean previous copy
+    if dest_profile.exists():
+        shutil.rmtree(dest_profile)
+    dest_user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy Local State from Chrome's parent dir (required for profile resolution)
+    local_state = src_profile.parent / "Local State"
+    dest_local_state = dest_user_data_dir / "Local State"
+    if local_state.is_file() and not dest_local_state.exists():
+        shutil.copy2(local_state, dest_local_state)
+
+    if mode == "full":
+        shutil.copytree(
+            src_profile,
+            dest_profile,
+            ignore=lambda _d, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+        )
+    else:
+        # Light mode — only cookies, logins, storage
+        dest_profile.mkdir(parents=True, exist_ok=True)
+        for rel in _LIGHT_PROFILE_FILES:
+            src = src_profile / rel
+            if not src.is_file():
+                continue
+            dst = dest_profile / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        for rel in _LIGHT_PROFILE_DIRS:
+            src = src_profile / rel
+            if not src.is_dir():
+                continue
+            shutil.copytree(
+                src, dest_profile / rel,
+                dirs_exist_ok=True,
+                ignore=lambda _d, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+            )
+
+
 def _default_chrome_user_data_dir() -> Path | None:
     """Return the default Chrome user-data-dir for the current platform."""
     system = platform.system()
@@ -222,16 +294,26 @@ def launch_chrome(
     startup_url = startup_url or "about:blank"
 
     if use_existing_profile:
-        chrome_udd = _default_chrome_user_data_dir()
-        if not chrome_udd:
+        chrome_udd = Path(os.environ.get("UNCHAINED_CHROME_UDD",
+                                          _default_chrome_user_data_dir() or ""))
+        if not chrome_udd.is_dir():
             raise LaunchError(
                 "Cannot find Chrome user data directory. "
                 "Set UNCHAINED_CHROME_UDD=/path/to/Chrome/User\\ Data"
             )
-        chrome_udd = Path(os.environ.get("UNCHAINED_CHROME_UDD", chrome_udd))
-        profile_dir = chrome_udd
-        profile_name = profile  # e.g. "Profile 8", "Default"
-        data_dir = chrome_udd.parent
+        src_profile = chrome_udd / profile
+        if not src_profile.is_dir():
+            available = [d.name for d in chrome_udd.iterdir()
+                         if d.is_dir() and (d.name == "Default" or d.name.startswith("Profile"))]
+            raise LaunchError(
+                f"Chrome profile {profile!r} not found at {src_profile}.\n"
+                f"Available profiles: {', '.join(sorted(available))}"
+            )
+        # Copy profile to sandboxed temp dir (same pattern as chrome_bridge.py)
+        data_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
+        profile_dir = data_dir / f"prov_{profile.replace(' ', '_')}_{port}"
+        profile_name = profile  # keep original name for --profile-directory
+        _copy_chrome_profile(src_profile, profile_dir, profile, mode="full")
     else:
         profile_name = _sanitize_profile(profile)
         data_dir = Path(os.environ.get("UNCHAINED_DATA_DIR", DEFAULT_DATA_DIR))
@@ -275,7 +357,7 @@ def launch_chrome(
         startup_url=startup_url,
         headless=headless,
         extra_args=extra_args,
-        profile_directory=profile_name if use_existing_profile else None,
+        profile_directory=profile if use_existing_profile else None,
     )
     uses_launcher_wrapper = bool(cmd) and cmd[0] == "open"
 
