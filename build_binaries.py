@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Build standalone DDM and Intel binaries using PyInstaller.
+"""Build native DDM and Intel binaries using Nuitka.
+
+Nuitka compiles Python → C → machine code. The resulting binary contains
+compiled native code, not extractable bytecode like PyInstaller.
 
 Usage:
     python build_binaries.py          # Build for current platform
     python build_binaries.py --install # Build and install to ~/.unchained/bin/
 
+Prerequisites:
+    uv pip install nuitka ordered-set
+
 Output:
-    dist/ddm     — standalone DDM binary
-    dist/intel   — standalone Intel binary
+    dist/ddm     — native DDM binary
+    dist/intel   — native Intel binary
 """
 
 import argparse
@@ -29,22 +35,23 @@ def _run(cmd: list[str], **kwargs):
 
 
 def build_binary(name: str, entry_module: str):
-    """Build a single binary with PyInstaller."""
-    print(f"\n=== Building {name} ===")
+    """Build a single native binary with Nuitka."""
+    print(f"\n=== Building {name} (Nuitka) ===")
     entry_point = ROOT / "unchained_cli" / entry_module
 
     cmd = [
-        sys.executable, "-m", "PyInstaller",
+        sys.executable, "-m", "nuitka",
         "--onefile",
-        "--name", name,
-        "--distpath", str(DIST),
-        "--workpath", str(ROOT / "build" / name),
-        "--specpath", str(ROOT / "build"),
-        # Hidden imports for the intel <-> ddm cross-import
-        "--hidden-import", "unchained_cli.intel_engine",
-        "--hidden-import", "unchained_cli.ddm_engine",
-        "--clean",
-        "--noconfirm",
+        f"--output-filename={name}",
+        f"--output-dir={DIST}",
+        # Include cross-imports between ddm and intel engines
+        "--include-module=unchained_cli.intel_engine",
+        "--include-module=unchained_cli.ddm_engine",
+        # Include websockets runtime dependency
+        "--include-package=websockets",
+        # Clean up build artifacts
+        "--remove-output",
+        "--assume-yes-for-downloads",
         str(entry_point),
     ]
     _run(cmd)
@@ -74,7 +81,7 @@ def install_binaries():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build DDM and Intel binaries")
+    parser = argparse.ArgumentParser(description="Build native DDM and Intel binaries")
     parser.add_argument("--install", action="store_true",
                         help="Install to ~/.unchained/bin/ after building")
     parser.add_argument("--ddm-only", action="store_true",
