@@ -57,6 +57,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
         port=args.port,
         profile=args.profile,
         headless=args.headless,
+        stealth=args.stealth,
         startup_url=args.url,
         timeout=args.timeout,
         extra_args=args.chrome_args,
@@ -76,6 +77,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
         else:
             print(f"Chrome started → http://{result['host']}:{result['port']} (PID {pid})")
         print(f"Profile dir → {result['profile_dir']}")
+    if result.get("stealth"):
+        print("Stealth → enabled")
     print(f"Startup URL → {result['startup_url']}")
 
 
@@ -365,8 +368,10 @@ examples:
                    help="Profile name — sandboxed by default, or Chrome profile dir name with --use-profile (e.g. 'Default', 'Profile 8')")
     p.add_argument("--use-profile", action="store_true",
                    help="Use an existing Chrome profile (with cookies/logins) instead of a sandboxed one")
+    p.add_argument("--stealth", action="store_true",
+                   help="Inject fingerprint overrides to evade bot detection (auto-enabled with --headless)")
     p.add_argument("--headless", action="store_true",
-                   help="Launch Chrome headless")
+                   help="Launch Chrome headless (enables --stealth automatically)")
     p.add_argument("--timeout", type=float, default=15.0, metavar="SECS",
                    help="How long to wait for CDP readiness (default: 15)")
     p.add_argument("--chrome-arg", dest="chrome_args", action="append", default=[],

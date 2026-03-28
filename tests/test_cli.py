@@ -45,6 +45,7 @@ class CliCommandTests(unittest.TestCase):
             timeout=15.0,
             chrome_args=[],
             use_profile=False,
+            stealth=False,
             json=False,
         )
 
@@ -76,6 +77,7 @@ class CliCommandTests(unittest.TestCase):
             timeout=15.0,
             chrome_args=[],
             use_profile=False,
+            stealth=False,
             json=False,
         )
 
@@ -108,6 +110,7 @@ class CliCommandTests(unittest.TestCase):
             timeout=15.0,
             chrome_args=[],
             use_profile=False,
+            stealth=False,
             json=False,
         )
 

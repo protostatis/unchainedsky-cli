@@ -267,6 +267,7 @@ def launch_chrome(
     port: int = 9222,
     profile: str = "default",
     headless: bool = False,
+    stealth: bool = False,
     startup_url: str = "about:blank",
     timeout: float = 15.0,
     extra_args: list[str] | None = None,
@@ -409,6 +410,14 @@ def launch_chrome(
             }
             if not uses_launcher_wrapper:
                 result["pid"] = proc.pid
+            # Stealth: inject fingerprint overrides (auto-enabled with headless)
+            if stealth or headless:
+                try:
+                    from .stealth import inject_stealth
+                    inject_stealth(host, port)
+                    result["stealth"] = True
+                except Exception:
+                    result["stealth"] = False
             return result
         time.sleep(sleep_interval)
         sleep_interval = min(sleep_interval * 2, 0.5)
