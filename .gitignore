@@ -6,3 +6,5 @@ dist_nuitka/
 build/
 .venv/
 .env
+private/
+dist_release/
