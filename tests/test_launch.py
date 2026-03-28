@@ -116,6 +116,10 @@ class LaunchTests(unittest.TestCase):
             "DEFAULT_DATA_DIR",
             Path(tmpdir),
         ), mock.patch.object(
+            launch.platform,
+            "system",
+            return_value="Darwin",
+        ), mock.patch.object(
             launch,
             "_version_json",
             side_effect=[None, {"Browser": "Chrome"}],
@@ -147,6 +151,10 @@ class LaunchTests(unittest.TestCase):
             launch,
             "DEFAULT_DATA_DIR",
             Path(tmpdir),
+        ), mock.patch.object(
+            launch.platform,
+            "system",
+            return_value="Darwin",
         ), mock.patch.object(
             launch,
             "_version_json",

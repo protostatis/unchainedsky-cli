@@ -1,0 +1,42 @@
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ patchelf ccache lsof procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml build_binaries.py unchained_entry.py ./
+COPY unchained_cli/ unchained_cli/
+COPY tests/ tests/
+COPY bin/ bin/
+
+RUN pip install uv && \
+    uv venv --clear .venv && \
+    uv pip install -e ".[agent]" && \
+    uv pip install nuitka ordered-set
+
+CMD ["bash", "-c", "\
+echo '=== Tests ===' && \
+.venv/bin/python -m unittest discover -s tests -v && \
+echo && echo '=== Syntax check ===' && \
+.venv/bin/python -m py_compile unchained_cli/*.py && \
+echo 'All files compile OK' && \
+echo && echo '=== --help ===' && \
+.venv/bin/unchained --help && \
+echo && echo '=== Build DDM binary ===' && \
+.venv/bin/python -m nuitka --onefile --output-filename=ddm --output-dir=dist \
+  --include-package=websockets --include-module=unchained_cli.intel_engine \
+  --include-module=unchained_cli.ddm_engine --remove-output \
+  --assume-yes-for-downloads unchained_cli/ddm_engine.py && \
+echo && echo '=== Build Intel binary ===' && \
+.venv/bin/python -m nuitka --onefile --output-filename=intel --output-dir=dist \
+  --include-package=websockets --include-module=unchained_cli.intel_engine \
+  --include-module=unchained_cli.ddm_engine --remove-output \
+  --assume-yes-for-downloads unchained_cli/intel_engine.py && \
+echo && echo '=== Binaries ===' && \
+ls -lh dist/ && file dist/* && \
+echo && echo '=== Verify binaries run ===' && \
+dist/ddm --help | head -5 && \
+dist/intel --help | head -5 && \
+echo && echo 'ALL PASSED' \
+"]

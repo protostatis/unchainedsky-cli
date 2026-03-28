@@ -493,22 +493,52 @@ class ChromeClient:
     @staticmethod
     def kill_chrome(port: int) -> str:
         """Kill Chrome process listening on *port*.  Returns status message."""
+        import platform
         import subprocess
-        try:
-            out = subprocess.check_output(
-                ["lsof", "-ti", f"tcp:{port}"], text=True
-            ).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return f"No process found on port {port}"
-        pids = {int(p) for p in out.split() if p.strip()}
-        if not pids:
-            return f"No process found on port {port}"
-        for pid in pids:
+        system = platform.system()
+
+        if system == "Windows":
+            # Windows: use netstat + taskkill
             try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        return f"Sent SIGTERM to PID(s): {', '.join(str(p) for p in sorted(pids))}"
+                out = subprocess.check_output(
+                    ["netstat", "-ano"], text=True, stderr=subprocess.DEVNULL
+                )
+                pids = set()
+                for line in out.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        parts = line.split()
+                        if parts:
+                            try:
+                                pids.add(int(parts[-1]))
+                            except ValueError:
+                                pass
+                if not pids:
+                    return f"No process found on port {port}"
+                for pid in pids:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True,
+                    )
+                return f"Killed PID(s): {', '.join(str(p) for p in sorted(pids))}"
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return f"No process found on port {port}"
+        else:
+            # macOS / Linux: use lsof + SIGTERM
+            try:
+                out = subprocess.check_output(
+                    ["lsof", "-ti", f"tcp:{port}"], text=True
+                ).strip()
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return f"No process found on port {port}"
+            pids = {int(p) for p in out.split() if p.strip()}
+            if not pids:
+                return f"No process found on port {port}"
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            return f"Sent SIGTERM to PID(s): {', '.join(str(p) for p in sorted(pids))}"
 
     # ------------------------------------------------------------------
     # Extra CDP helpers
