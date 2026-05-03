@@ -146,7 +146,12 @@ def _page_tabs(host: str, port: int) -> list[dict[str, Any]]:
         return []
     if not isinstance(data, list):
         return []
-    return [tab for tab in data if isinstance(tab, dict) and tab.get("type") == "page"]
+    return [
+        tab for tab in data
+        if isinstance(tab, dict)
+        and tab.get("type") == "page"
+        and not (tab.get("url") or "").startswith(("chrome://", "devtools://"))
+    ]
 
 
 def _open_tab(host: str, port: int, url: str) -> dict[str, Any] | None:

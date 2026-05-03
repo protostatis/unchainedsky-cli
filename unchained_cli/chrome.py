@@ -47,7 +47,11 @@ class ChromeClient:
             with urllib.request.urlopen(
                 f"{self._base}/json", timeout=_CONNECT_TIMEOUT
             ) as r:
-                return [t for t in json.loads(r.read()) if t.get("type") == "page"]
+                return [
+                    t for t in json.loads(r.read())
+                    if t.get("type") == "page"
+                    and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+                ]
         except urllib.error.URLError as exc:
             raise CDPError(
                 f"Cannot connect to Chrome at localhost:{self.port}. "
@@ -219,6 +223,12 @@ class ChromeClient:
     # ------------------------------------------------------------------
 
     def navigate(self, tab_id: str, url: str) -> dict:
+        # Chrome 147+ AIM popup hijacks navigation on background tabs; bring
+        # the tab to front first to ensure the navigate lands on the right target.
+        try:
+            self.send(tab_id, "Page.bringToFront")
+        except CDPError:
+            pass
         return self.send(
             tab_id, "Page.navigate", {"url": url},
             wait_for_event="Page.loadEventFired",
