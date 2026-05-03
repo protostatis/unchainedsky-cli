@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+import urllib.request
 from unittest import mock
 
 from unchained_cli.chrome import CDPError, ChromeClient
