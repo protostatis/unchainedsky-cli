@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import urllib.error
@@ -293,6 +294,27 @@ class LaunchTests(unittest.TestCase):
     def test_sanitize_profile_raises_on_long_name(self):
         with self.assertRaisesRegex(launch.LaunchError, "too long"):
             launch._sanitize_profile("a" * 33)
+
+    def test_page_tabs_excludes_chrome_and_devtools_scheme_targets(self):
+        tabs = [
+            {"type": "page", "id": "real", "url": "https://example.com"},
+            {"type": "page", "id": "aim", "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html"},
+            {"type": "page", "id": "dt", "url": "devtools://devtools/bundled/devtools_app.html"},
+            {"type": "other", "id": "bg", "url": "https://bg.com"},
+        ]
+        raw = json.dumps(tabs).encode()
+        response = mock.MagicMock()
+        response.read.return_value = raw
+        cm = mock.MagicMock()
+        cm.__enter__ = mock.Mock(return_value=response)
+        cm.__exit__ = mock.Mock(return_value=False)
+        with mock.patch("urllib.request.urlopen", return_value=cm):
+            result = launch._page_tabs("127.0.0.1", 9222)
+        ids = [t["id"] for t in result]
+        self.assertIn("real", ids)
+        self.assertNotIn("aim", ids)
+        self.assertNotIn("dt", ids)
+        self.assertNotIn("bg", ids)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+import urllib.request
 from unittest import mock
 
 from unchained_cli.chrome import CDPError, ChromeClient
@@ -45,6 +46,56 @@ class ChromeClientTests(unittest.TestCase):
             return_value=[{"id": "tab-1"}, {"id": "tab-2"}],
         ):
             self.assertEqual(client.resolve_tab("auto"), "tab-1")
+
+    def _fake_urlopen(self, tabs):
+        """Return a context-manager mock that yields JSON-encoded tabs."""
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps(tabs).encode()
+        cm = mock.MagicMock()
+        cm.__enter__ = mock.Mock(return_value=response)
+        cm.__exit__ = mock.Mock(return_value=False)
+        return cm
+
+    def test_list_tabs_excludes_chrome_scheme_targets(self):
+        tabs = [
+            {"type": "page", "id": "real-tab", "url": "https://example.com"},
+            {"type": "page", "id": "aim-tab", "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html"},
+            {"type": "page", "id": "devtools-tab", "url": "devtools://devtools/bundled/devtools_app.html"},
+        ]
+        client = ChromeClient()
+        with mock.patch("urllib.request.urlopen", return_value=self._fake_urlopen(tabs)):
+            result = client.list_tabs()
+        ids = [t["id"] for t in result]
+        self.assertIn("real-tab", ids)
+        self.assertNotIn("aim-tab", ids)
+        self.assertNotIn("devtools-tab", ids)
+
+    def test_navigate_sends_bring_to_front_before_navigate(self):
+        client = ChromeClient()
+        calls = []
+        def fake_send(tab_id, method, params=None, **kw):
+            calls.append(method)
+            if method == "Page.navigate":
+                return {"frameId": "f1"}
+            return {}
+        with mock.patch.object(client, "_ws_url_for", return_value="ws://x"), \
+             mock.patch.object(client, "send", side_effect=fake_send):
+            client.navigate("tab-1", "https://example.com")
+        self.assertEqual(calls[0], "Page.bringToFront")
+        self.assertEqual(calls[1], "Page.navigate")
+
+    def test_navigate_continues_if_bring_to_front_fails(self):
+        client = ChromeClient()
+        navigate_called = []
+        def fake_send(tab_id, method, params=None, **kw):
+            if method == "Page.bringToFront":
+                raise CDPError("not supported")
+            navigate_called.append(method)
+            return {"frameId": "f1"}
+        with mock.patch.object(client, "_ws_url_for", return_value="ws://x"), \
+             mock.patch.object(client, "send", side_effect=fake_send):
+            client.navigate("tab-1", "https://example.com")
+        self.assertEqual(navigate_called, ["Page.navigate"])
 
     def test_js_eval_frame_uses_isolated_world_context(self):
         client = ChromeClient()

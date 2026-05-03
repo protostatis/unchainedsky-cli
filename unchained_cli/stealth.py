@@ -114,6 +114,8 @@ def inject_stealth(host: str, port: int) -> None:
     for tab in tabs:
         if tab.get("type") != "page":
             continue
+        if (tab.get("url") or "").startswith(("chrome://", "devtools://")):
+            continue
         ws_url = tab.get("webSocketDebuggerUrl")
         if not ws_url:
             continue
