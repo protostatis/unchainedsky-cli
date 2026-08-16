@@ -17,6 +17,21 @@ brew install --HEAD unchainedsky/tap/unchainedsky-cli
 
 The `[agent]` extra includes the Anthropic SDK for the interactive Claude agent. Omit it if you only need the CLI tools.
 
+## Why Local Chrome
+
+Some browser tasks depend on identity that is already assembled in a Chrome
+profile: cookies, login state, extensions, and account selection. For example,
+an agent can open the AWS console with the profile you already use, read the
+current budget status, and prepare the next step. A caller should stop for your
+confirmation before changing a budget, permission, subscription, or other
+consequential setting.
+
+Use an isolated profile for ordinary browsing. Use `--use-profile` only when a
+task genuinely needs an existing session, and treat that profile as access to
+the accounts it contains. Automate only sites and accounts you are permitted
+to use, respect site controls and terms, and keep secrets out of prompts,
+logs, and screenshots.
+
 ## Quick Start
 
 ```bash
@@ -46,10 +61,10 @@ unchained launch
 # Existing Chrome profile (with cookies, logins, extensions)
 unchained --port 9333 launch --use-profile --profile "Profile 3" https://x.com
 
-# Headless with stealth (auto-enables fingerprint evasion)
+# Headless Chrome (applies the same compatibility overrides as --stealth)
 unchained launch --headless https://example.com
 
-# Stealth mode (visible window, bot detection evasion)
+# Compatibility overrides for sites that misclassify automated Chrome
 unchained launch --stealth https://example.com
 
 # Multiple profiles on different ports
@@ -67,6 +82,9 @@ unchained --port 9444 launch --use-profile --profile "Profile 8"
 | `launch [url]` | Launch Chrome with CDP (`--profile`, `--use-profile`, `--stealth`, `--headless`) |
 | `status` | Check if Chrome is alive |
 | `kill` | Kill Chrome on this port |
+
+`--stealth` adjusts browser-exposed properties for compatibility. It does not
+make automation invisible or grant permission to bypass a site's controls.
 
 ### Navigation & Interaction
 
